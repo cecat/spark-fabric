@@ -209,3 +209,95 @@ for an operator decision before Phase 4 begins.
 
 - Phase 1 (embedder) not started — awaiting operator ack of this report and the
   Luoji-sandboxing decision, per ground rule "report before installing."
+
+---
+
+## Addendum — Luoji session-capture prep (Option B) + upgrade eval
+
+Following the Phase 0 finding that Luoji is sandboxed and his session logs live
+in a Docker named volume (not a host path), the operator chose to surface those
+logs to the host via a docker-compose bind mount ("Option B") so the Phase 4
+FALDA tap can read them as plain files. Done on **2026-07-28**.
+
+### Upgrade evaluation (concluded: stay on 6.11)
+
+Operator asked whether to also upgrade OpenClaw to latest while touching the
+gateway. Evaluated per the plan's "check the actual artifact" method:
+
+- **Already on the deliberately-pinned latest-stable.** Running
+  `2026.6.11`; `spark-ai/CHANGELOG.md` shows it was pinned 2026-07-10
+  specifically to stop `:latest` auto-upgrades that had crash-looped the box.
+- Available targets: `extended-stable 2026.6.33` (same 6.x line),
+  `latest 2026.7.1-2` (**7.x major** — the real breaking-change delta),
+  `beta 2026.7.2-beta.5`.
+- `spark-ai/UPGRADE-2026.6.8.md` is the *historical* 4.2→6.11 upgrade analysis,
+  already executed — not a pending action.
+- **Decision (operator): stay on 6.11**, don't get sidetracked into a 7.x major
+  during fabric bring-up. `gh` CLI not installed (was only needed to source 7.x
+  release notes; moot now).
+
+### Option B — what was done
+
+- Host dir chosen: **`~/.openclaw-sessions/luoji`** (runtime state in `$HOME`,
+  **outside** any repo and — critically — outside the sandbox's `/workspace`
+  mount). Operator's first instinct was to nest it under
+  `spark-ai-agents/luoji/`, but that dir **is** bind-mounted into Luoji's
+  sandbox as `/workspace` (rw) — nesting sessions there would have exposed the
+  agent's own raw session logs to the agent, an isolation breach. Moved out.
+- Edited `spark-ai/openclaw/docker-compose.yml`: added one bind,
+  `~/.openclaw-sessions/luoji → /home/node/.openclaw/agents/luoji/sessions:rw`.
+  Backup: `docker-compose.yml.bak-pre-bindmount-20260728T194500Z`.
+- Pre-change snapshot of the whole config volume:
+  `~/backups/openclaw/openclaw-config-pre-bindmount-20260728T194143Z.tar.gz`.
+- Copied the 20 existing session items out before the mount could shadow them.
+- Recreated the gateway (`docker compose up -d`) — brief bounce of luoji /
+  cecat / chattpc26. uid alignment is clean (gateway `node` = uid 1000 =
+  `catlett`), so host files are owned by the operator.
+
+### Verified
+
+- Mount live (rw, correct source→target); container view == host view (20
+  items, `sessions.json` present) — nothing shadowed.
+- Gateway writes through the mount (probe round-tripped host↔container).
+- **Sandbox isolation holds:** the luoji sandbox sees `/workspace` (his
+  workspace files) but **not** the sessions dir.
+- **Proven with live user data:** read the operator's actual Slack DMs to Luoji
+  directly from `~/.openclaw-sessions/luoji/2da653f1-*.jsonl`. This is exactly
+  the Phase 4 capability — confirmed end-to-end, not just synthetically.
+
+### Two red herrings chased during verification (both benign)
+
+1. **"Luoji not replying."** Not a gateway fault. Two causes, neither related to
+   the bind mount:
+   - The tap-relevant session (`2da653f1`) shows Luoji **received** the DMs and
+     chose `NO_REPLY`, reasoning *"addressed to ChatCeC, not me."* OpenClaw
+     allows **one bot for all agents**, so the operator uses per-agent channels
+     where a mention of the shared bot = that channel's agent. Luoji's identity
+     logic gates on the bot **display name** ("ChatCeC") rather than the
+     channel, so he defers instead of answering. **Fix lives in
+     `spark-ai-agents`** (Luoji's `SOUL.md`/`IDENTITY.md`) — operator is
+     handling it. Not a spark-fabric/gateway issue.
+   - Per-turn latency is inflated by the `sage` MCP server
+     (`mcp.sagecontinuum.org`) timing out every turn (~15s in the tool-bundle
+     phase). Pre-existing, remote endpoint down, unrelated.
+2. **"cecat runaway loop."** Investigated (read session `b7c1bf04`): **benign.**
+   cecat is doing legitimate Gmail triage (classifying real mail, applying
+   rules, archiving bulk/newsletters) in a long-lived session (13:11→20:30),
+   still progressing, no errors. The "model call every ~5s" was task work, not a
+   loop. Initial alarm was mine, based on log volume before reading content —
+   recorded here so the false positive is on the record.
+
+### Boundary / secrets notes
+
+- The compose edit is a **`spark-ai`** change (shared services). Committed there
+  with a CHANGELOG entry, per operator; kept out of `spark-fabric`.
+- No secrets added. Session logs are conversation content, deliberately kept in
+  `$HOME` (not a repo) so they can never be `git add`-ed by accident.
+
+### Open followups
+
+- **Luoji mention-gating** (spark-ai-agents) — operator handling.
+- **`sage` MCP timeout** — cosmetic/latency; revisit if it bothers day-to-day.
+- **Phase 4 tap still needs a format adapter** — OpenClaw session JSONL is an
+  event/trajectory log (`type`/`id`/`parentId`/`role` under `message`), not the
+  flat `{role,content}` turns `falda_tap.py` assumes.
