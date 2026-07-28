@@ -1,0 +1,34 @@
+diff --git a/src/falda.ts b/src/falda.ts
+index b77489b..76a1f64 100644
+--- a/src/falda.ts
++++ b/src/falda.ts
+@@ -147,11 +147,17 @@ export class Falda {
+ 
+   deleteStream(p: { ids?: string[]; session_id?: string }): number {
+     let n = 0;
++    const delF = this.db.prepare("DELETE FROM stream_fts WHERE id=?");
++    const delV = this.db.prepare("DELETE FROM stream_vec WHERE id=?");
+     if (p.ids?.length) {
+       const del = this.db.prepare("DELETE FROM stream WHERE id=?");
+-      for (const id of p.ids) n += del.run(id).changes;
++      for (const id of p.ids) { n += del.run(id).changes; delF.run(id); delV.run(id); }
+     } else if (p.session_id) {
++      // Collect ids first so the fts/vec shadow tables can be cleaned too —
++      // otherwise orphaned index rows surface as contentless phantom hits.
++      const ids = this.db.prepare("SELECT id FROM stream WHERE session_id=?").all(p.session_id) as { id: string }[];
+       n = this.db.prepare("DELETE FROM stream WHERE session_id=?").run(p.session_id).changes;
++      for (const { id } of ids) { delF.run(id); delV.run(id); }
+     }
+     return n;
+   }
+@@ -205,7 +211,9 @@ export class Falda {
+   deleteAtoms(ids: string[]): number {
+     let n = 0;
+     const del = this.db.prepare("DELETE FROM atoms WHERE id=?");
+-    for (const id of ids) n += del.run(id).changes;
++    const delF = this.db.prepare("DELETE FROM atoms_fts WHERE id=?");
++    const delV = this.db.prepare("DELETE FROM atoms_vec WHERE id=?");
++    for (const id of ids) { n += del.run(id).changes; delF.run(id); delV.run(id); }
+     return n;
+   }
+ 

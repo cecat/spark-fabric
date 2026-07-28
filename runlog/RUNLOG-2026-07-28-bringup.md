@@ -405,3 +405,60 @@ loads clean (SQLite 3.53.2), `sqlite-vec-linux-arm64` present. No
 **Phase 2 gate: GREEN.** No secrets. The falda source edit lives as a tracked
 patch + apply script, not a hand-edit a rebuild would lose. Stopping before
 Phase 3 (tenants + shared pool) per the gating rule.
+
+---
+
+## Phase 3 — Tenants + shared pool. VERIFY 3 GREEN.
+
+Done **2026-07-28**. Tenants `gandalf`/`luoji` are **implicit** (a
+`(tenant, self)` store is created on first write — nothing to "create"). Only
+the shared pool is declared.
+
+### API correction (checked source, per the method)
+
+The plan's Phase 3/4 examples use a **query-string** form
+(`GET /stream/search?q=…&tenant=luoji`) and a bare `/pools/declare -d {...}`.
+The real API (`src/gateway.ts`) is **all POST with a JSON body**, `{tenant,
+pool}` as body fields; no `pool` ⇒ private `self`. `/stream/add` needs
+`{session_id, messages:[{role,content}]}`; `/atoms/upsert` needs `{content,
+type?}`. Used atoms for the VERIFY (discrete facts). Captured a repeatable,
+idempotent `declare-pools.sh` (declare-or-update, since `/pools/declare` errors
+`exists` on re-run).
+
+### VERIFY 3 — isolation + sharing, proven empirically and physically
+
+- Private atom written to `gandalf` (self) → **not** returned by a `luoji`
+  search; **is** returned by a `gandalf` search. ✓
+- Atom written by `luoji` to `shared-corpus` → returned to **both** `gandalf`
+  and `luoji` **via the pool**; **not** present in either tenant's private
+  `self` store (verified by exact-content check, not just score). ✓
+- On disk: separate SQLite files — `tenants/gandalf/self/falda.db`,
+  `tenants/luoji/self/falda.db`, `pools/shared-corpus/falda.db`. Isolation is
+  filesystem-physical, not a query predicate. ✓
+
+### Bug found during cleanup → fixed (patch 0002)
+
+Deleting the VERIFY test atoms exposed a real **upstream FALDA bug**:
+`deleteAtoms`/`deleteStream` delete only the primary row, **orphaning the
+`_fts` (and `_vec`) shadow rows**. Orphans surface in `/search` as **phantom
+hits** — a `score` with no `id`/`content` — and they **coexist with real
+results** (a later "helium" search returned the real atom *plus* a phantom). The
+authoritative `/query` route is unaffected. This would have bitten the Phase 4/5
+`/search` consumers intermittently (after any delete).
+
+- Root cause in `src/falda.ts`: deletes never touched the shadow tables, though
+  `upsertAtom` already does the correct `DELETE FROM atoms_fts/atoms_vec WHERE
+  id=?` cleanup. Fix mirrors that.
+- No upstream fix at the pin (`origin/main` == `c9f14bc`). Captured as
+  `patches/0002-clean-fts-vec-on-delete.patch`; `apply.sh` now loops over all
+  `patches/*.patch`.
+- Purged the pre-existing orphan rows (gandalf: 1 stream + 2 atoms;
+  shared-corpus: 1 stream) left by deletes before the fix.
+- Regression-tested: write→delete→search now returns `items:[]`, raw
+  `atoms_fts` count 0, and `npm run smoke` still **ALL TIERS GREEN**.
+- Operator chose "patch now, like loopback."
+
+**Phase 3 gate: GREEN.** Stores left clean (`/query` total 0 across all three).
+No secrets. Stopping before Phase 4 (Luoji shadow capture) per the gating rule —
+note Phase 4 still needs the OpenClaw-session format adapter and will use the
+host-mounted session path from the Option B bind-mount.

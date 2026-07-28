@@ -11,7 +11,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FALDA_SRC="${FALDA_SRC:-$HOME/code/falda}"
 NODE_BIN="${NODE_BIN:-$HOME/.nvm/versions/node/v22.22.3/bin/node}"
 NPM_BIN="${NPM_BIN:-$HOME/.nvm/versions/node/v22.22.3/bin/npm}"
-PATCH="$HERE/patches/0001-bind-loopback-by-default.patch"
 ENV_OUT="$HOME/.config/falda/falda.env"
 
 echo "==> checking prerequisites"
@@ -20,17 +19,20 @@ echo "==> checking prerequisites"
 node_major="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')"
 [ "$node_major" -ge 20 ] || { echo "FATAL: node $node_major < 20 (falda engines requirement)"; exit 1; }
 
-echo "==> applying loopback-bind patch (idempotent)"
+echo "==> applying tracked patches (idempotent, in order)"
 cd "$FALDA_SRC"
-if git apply --reverse --check "$PATCH" >/dev/null 2>&1; then
-  echo "    already applied — skipping"
-elif git apply --check "$PATCH" >/dev/null 2>&1; then
-  git apply "$PATCH"
-  echo "    applied"
-else
-  echo "FATAL: patch neither applies nor is already applied — falda source drifted from the pin. Review $PATCH"
-  exit 1
-fi
+for PATCH in "$HERE"/patches/*.patch; do
+  name="$(basename "$PATCH")"
+  if git apply --reverse --check "$PATCH" >/dev/null 2>&1; then
+    echo "    $name: already applied — skipping"
+  elif git apply --check "$PATCH" >/dev/null 2>&1; then
+    git apply "$PATCH"
+    echo "    $name: applied"
+  else
+    echo "FATAL: $name neither applies nor is already applied — falda source drifted from the pin. Review it."
+    exit 1
+  fi
+done
 
 echo "==> installing deps + rebuilding better-sqlite3 under pinned node (ABI must match ExecStart)"
 export PATH="$(dirname "$NODE_BIN"):$PATH"

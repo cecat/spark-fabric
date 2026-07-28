@@ -36,6 +36,37 @@ unit, the env template, and an idempotent apply script.
    a single `FALDA_ROOT` (DB + blobs + `EMBEDDING.json` under one dir). The env
    template uses `FALDA_ROOT`.
 
+## Patches applied (tracked in `patches/`, re-applied by `apply.sh`)
+
+- **`0001-bind-loopback-by-default.patch`** — `FALDA_HOST` env, default
+  `127.0.0.1` (see #1 above).
+- **`0002-clean-fts-vec-on-delete.patch`** — `deleteAtoms`/`deleteStream` only
+  deleted from the primary table, orphaning the `_fts`/`_vec` shadow rows. Those
+  orphans surfaced in `/search` as **phantom hits** (a `score` but no
+  `id`/`content`) that mixed into real results. The fix mirrors the cleanup
+  `upsertAtom` already does. Found during Phase 3 VERIFY cleanup; no upstream fix
+  exists at the pin. Upstreamable as a bugfix PR.
+
+Both are POST/JSON API notes: all data + pool routes are **POST with a JSON
+body** carrying optional `{tenant, pool}` — *not* the query-string form
+(`?q=…&tenant=…`) some plan/README examples show. No `pool` ⇒ private `self`
+store.
+
+## Tenants + pools (Phase 3)
+
+Tenants are **implicit** — a `(tenant, self)` store is created on first write, so
+`gandalf` and `luoji` need no explicit creation. Only the shared pool is
+declared, by `declare-pools.sh` (idempotent: declare-or-update):
+
+```
+pool shared-corpus  {gandalf: readwrite, luoji: readwrite}
+```
+
+Isolation is **physical** (separate SQLite files per `(tenant, self)` and per
+pool), not a WHERE-clause predicate — on disk:
+`~/.falda/data/tenants/<t>/self/falda.db` and
+`~/.falda/data/pools/<pool>/falda.db`.
+
 ## Native ABI gotcha (why the node path is pinned)
 
 `better-sqlite3` is a native module. `npm ci` / `npm rebuild` **must** run under
