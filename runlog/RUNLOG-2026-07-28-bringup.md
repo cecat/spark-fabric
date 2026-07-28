@@ -347,3 +347,61 @@ units. Installed as a `--user` systemd unit (matching the existing
 **Phase 1 gate: GREEN.** No secrets added. Nothing hand-configured that a
 rebuild would lose (unit + pins in repo; binary/model re-fetched by documented
 steps). Stopping before Phase 2 (FALDA gateway) per the gating rule.
+
+---
+
+## Phase 2 — FALDA gateway. VERIFY 2 GREEN.
+
+Done **2026-07-28**. falda checkout present at pin `c9f14bc`. Installed as a
+loopback-bound `--user` systemd unit running under the pinned node.
+
+### The node question from Phase 0 is now settled
+
+falda's `package.json` sets `engines: node >=20`. System `/usr/bin/node` is
+**v18** → disqualified. Only **nvm v22.22.3** (ABI 127) qualifies, so that's the
+gateway's node. `npm ci` + `npm rebuild better-sqlite3` run under it; the unit's
+`ExecStart` pins the absolute v22 path (no `PATH` reliance). `better-sqlite3`
+loads clean (SQLite 3.53.2), `sqlite-vec-linux-arm64` present. No
+`ERR_DLOPEN_FAILED`.
+
+### What surprised me / assumptions checked (both caught by reading source)
+
+1. **FALDA binds `0.0.0.0`, and there was no env to stop it.** `src/gateway.ts`
+   called `.listen(PORT, …)` with no host — Node binds all interfaces. This box
+   has a **Tailscale IP (100.120.99.52)** and **LAN IP (10.0.5.124)**, so
+   no-auth FALDA would have been reachable off-box — the precise exposure the
+   plan's SECURITY note forbids. No host firewall constrains 8077, and I have no
+   sudo to add one. **Fix:** a one-line change adding `FALDA_HOST` (default
+   `127.0.0.1`), captured as `services/falda/patches/0001-bind-loopback-by-default.patch`
+   and re-applied by `services/falda/apply.sh` after any fresh clone (the
+   checkout is deliberately un-vendored, so a raw edit would vanish on
+   re-clone). Confirmed the socket is now `127.0.0.1:8077`. Operator delegated
+   the how; chose the patch+apply-script route as lowest-maintenance and
+   rebuild-safe, with **zero collateral** (8077 is used by nothing else on the
+   box; the change only tightens the bind).
+2. **Config is `FALDA_ROOT`, not `FALDA_DB`/`FALDA_BLOBS`.** falda's README
+   still documents the old split; the running gateway reads a single
+   `FALDA_ROOT` (DB + blobs + `EMBEDDING.json` lock in one dir). Env template
+   uses `FALDA_ROOT`. Another doc/source drift — checked the loader, didn't
+   trust the doc.
+
+### Other notes
+
+- **Embedding lock is real and strict.** On first boot the gateway writes
+  `EMBEDDING.json` (model+dim); a later mismatch is a FATAL exit, not a warning.
+  Ours initialized `model=nomic-embed-text dim=768`. Changing either later means
+  re-embedding — good, it prevents silent recall corruption.
+- Deliverables in `services/falda/`: `falda-gateway.service`,
+  `falda.env.template`, `apply.sh` (idempotent), `patches/0001-*.patch`, README
+  with pins. Data root `~/.falda/data`; log `~/.falda/gateway.log`; env at
+  `~/.config/falda/falda.env` (0600).
+
+### VERIFY 2
+
+- `GET /healthz` → `{"ok":true,"tiers":["stream","atoms","scenes","core"],"pools":true}`. ✓
+- `npm run smoke` → **13 passed, 0 failed — ALL TIERS GREEN**. ✓
+- Socket is **`127.0.0.1:8077`** (confirmed via `ss`, after the loopback patch). ✓
+
+**Phase 2 gate: GREEN.** No secrets. The falda source edit lives as a tracked
+patch + apply script, not a hand-edit a rebuild would lose. Stopping before
+Phase 3 (tenants + shared pool) per the gating rule.

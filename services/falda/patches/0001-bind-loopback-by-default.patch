@@ -1,0 +1,20 @@
+diff --git a/src/gateway.ts b/src/gateway.ts
+index ae541d2..0f2009b 100644
+--- a/src/gateway.ts
++++ b/src/gateway.ts
+@@ -41,6 +41,9 @@ import { PoolManager, PoolError } from "./pools.js";
+ import { makeEmbedder, makeLocalEmbedder } from "./embedder.js";
+ 
+ const PORT = Number(process.env.FALDA_PORT ?? 8077);
++// FALDA has no auth of its own — default to loopback so it is never exposed
++// off-box. Override with FALDA_HOST only behind an authenticating proxy.
++const HOST = process.env.FALDA_HOST ?? "127.0.0.1";
+ const DIM = Number(process.env.FALDA_DIM ?? 768);
+ const ROOT = process.env.FALDA_ROOT ?? "./falda-data";
+ const DEFAULT_TENANT = process.env.FALDA_DEFAULT_TENANT ?? "default";
+@@ -171,4 +174,4 @@ createServer((req, res) => {
+       res.end(JSON.stringify({ error: String(e?.message ?? e) }));
+     }
+   });
+-}).listen(PORT, () => console.log(`FALDA gateway listening on :${PORT} (root=${ROOT}, default-tenant=${DEFAULT_TENANT})`));
++}).listen(PORT, HOST, () => console.log(`FALDA gateway listening on ${HOST}:${PORT} (root=${ROOT}, default-tenant=${DEFAULT_TENANT})`));
