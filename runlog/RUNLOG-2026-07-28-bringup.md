@@ -301,3 +301,49 @@ gateway. Evaluated per the plan's "check the actual artifact" method:
 - **Phase 4 tap still needs a format adapter** — OpenClaw session JSONL is an
   event/trajectory log (`type`/`id`/`parentId`/`role` under `message`), not the
   flat `{role,content}` turns `falda_tap.py` assumes.
+
+---
+
+## Phase 1 — Embedder (Ollama + nomic-embed-text). VERIFY 1 GREEN.
+
+Done **2026-07-28**. Ollama was **not** installed; port 11434 free; no prior
+units. Installed as a `--user` systemd unit (matching the existing
+`gandalf-*` bridge units), bound to loopback only.
+
+### What surprised me / assumptions checked
+
+1. **The `.tgz` URL is wrong — assets are `.tar.zst`.** `ollama.com/download/
+   ollama-linux-arm64.tgz` redirects to a GitHub path that **404s** (delivered a
+   9-byte "Not Found", whose sha256 is the well-known empty-ish hash — a good
+   canary that the download failed). Queried the GitHub releases API for the
+   real asset names instead of guessing. Correct assets for v0.32.5:
+   `ollama-linux-arm64.tar.zst` (1.5 GB generic) and two JetPack variants.
+2. **JetPack variant would have been the wrong pick.** Release ships
+   `arm64`, `arm64-jetpack5`, `arm64-jetpack6`. This GB10/DGX Spark does **not**
+   present as a Tegra/Jetson board — no `/etc/nv_tegra_release`, no
+   `/proc/device-tree/model` — and runs CUDA 13.0. JetPack builds target older
+   L4T CUDA; chose the **generic arm64** build (bundles its own CUDA libs, CPU
+   fallback clean). Embedder runs on CPU anyway, so this is belt-and-suspenders.
+3. **No root needed.** Installed to `~/opt/ollama` and ran as a `--user` unit —
+   no `sudo`, no system service, consistent with the plan's preference and the
+   existing user units.
+
+### Pins (also in `services/embedder/README.md`)
+
+- Ollama **v0.32.5** generic linux-arm64;
+  tarball sha256 `aa7e06b5683ee66c4a3ec68ea7236db43b5a5d0821f0dfe2c5a215f4462bddf4`.
+- Model `nomic-embed-text:latest`, id `0a109f422b47`, 274 MB.
+- Binary `~/opt/ollama/bin/ollama`; models `~/.ollama/models`; log
+  `~/.ollama/ollama.log`. Unit symlinked from the repo (repo = source of truth).
+
+### VERIFY 1
+
+- `GET /api/version` → `{"version":"0.32.5"}`.
+- Listening socket is **`127.0.0.1:11434` only** (confirmed via `ss` — not
+  `0.0.0.0`).
+- `POST /v1/embeddings` (OpenAI-compatible) with `nomic-embed-text` →
+  **embedding length 768**. Matches `FALDA_DIM=768` for Phase 2. ✓
+
+**Phase 1 gate: GREEN.** No secrets added. Nothing hand-configured that a
+rebuild would lose (unit + pins in repo; binary/model re-fetched by documented
+steps). Stopping before Phase 2 (FALDA gateway) per the gating rule.
