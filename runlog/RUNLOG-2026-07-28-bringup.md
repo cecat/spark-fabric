@@ -821,3 +821,120 @@ Both agents' telegram/slack + OpenClaw conversations mirror to FALDA continuousl
 This is the "just works" steady state Charlie wanted BEFORE any research
 experiments. Next: 5c FALDA memory provider (built as experimental apparatus per
 the REQ-1/REQ-2 prep above).
+
+---
+
+## Phase 5c — FALDA as Gandalf's memory provider — ✅ VERIFY 5c GREEN (2026-07-29)
+
+Built the FALDA memory provider as experimental apparatus per REQ-1/REQ-2.
+Cross-agent automatic recall proven end-to-end. Work lands in **Spark-Hermes**
+(Gandalf-specific), per the boundary. Nothing in spark-fabric except findings.
+
+### Design (locked with Charlie this session)
+- **`sync_turn` is a NO-OP.** The 5b host tap remains the sole shadow writer to
+  `tenant=gandalf` — no double-write, tenant privacy intact.
+- **Sharing to `shared-corpus` is a deliberate agent act**, never automatic —
+  exposed as the `falda_share` tool, not a per-turn firehose (Charlie: automatic
+  pool writes would destroy the privacy boundary).
+- **Two tools, each INDEPENDENTLY config-gated** (`falda_share`, `falda_search`):
+  `get_tool_schemas()` consults config so the 2×2 (prefetch × search-tool, share
+  independent) is fully addressable. Charlie needs the whole grid; a hardcoded
+  tool would lose half of it.
+- **Recall (prefetch + core block) separately gated; rolled OUT off→on.**
+- **Telemetry lives inside the sandbox** (`/sandbox/.hermes/telemetry/`, 0700);
+  a host timer `docker cp`s it to durable `~/.falda/telemetry/` (0600).
+
+### Deliverables (Spark-Hermes)
+- `gandalf/plugins/falda/__init__.py` — `FaldaMemoryProvider` + `register(ctx)`.
+  stdlib `urllib` transport (NOT requests — not on the gateway interpreter path;
+  urllib honors the gateway proxy env → tracked principal, passes 5a policy).
+- `gandalf/plugins/falda/{plugin.yaml,condition.yaml}` — condition.yaml is the
+  "one file + restart = one condition" knob file.
+- `ops/apply-memory-provider.sh` (`--activate`/`--deactivate`), wired into
+  `ops/post-rebuild.sh` (re-pushes plugin AND re-activates — rebuild wipes both
+  the overlay plugin and `memory.provider`).
+- `ops/pull-telemetry.sh` + `bringup/45-falda-bridge/gandalf-telemetry-pull.{service,timer}`.
+- `gandalf/skills/falda-memory/SKILL.md`.
+
+### Source facts verified (not assumed)
+- Provider registration: drop `$HERMES_HOME/plugins/falda/` with an `__init__.py`
+  exposing `register(ctx)`; set `memory.provider: falda`. Worked example: bundled
+  `holographic`. Loaded/available confirmed via Hermes's own
+  `discover_memory_providers()`/`load_memory_provider()`.
+- **Gateway runs `/opt/hermes/.venv/bin/python`** (the venv has PyYAML/requests),
+  NOT the bare `/usr/bin/python3.13`. `/proc/205/exe` was misleading.
+- **Cron turns pass `skip_memory=True`** (`cron/scheduler.py:1464`) → the provider
+  never inits for cron; only real interactive (telegram/slack) turns. The two
+  `gateway/run.py` `skip_memory=True` sites are auxiliary sub-agents, not the main
+  path.
+
+### Two landmines caught
+1. **`docker exec` heredoc silent no-op.** The apply script's yaml edit read
+   empty stdin (no `-i`), reported success, changed nothing. Fixed with
+   `docker exec -i`.
+2. **Config-integrity anchor.** `/etc/nemoclaw/hermes.config-hash` (root-owned)
+   pins `config.yaml`; my edit changed its hash. Traced the startup logic: this
+   deployment runs the **non-root path** (`nemoclaw-start` + gateway both run as
+   `sandbox`), which calls `verify_config_integrity_if_locked` → **skips** because
+   `/sandbox/.hermes/.config-hash` is sandbox-owned, not root-locked. config.yaml
+   had already diverged from the /etc anchor on 2026-07-28 (pre-me); gateway has
+   run fine since. Restart verified safe; boot log: "integrity check skipped for
+   mutable default." (Only the ROOT startup path enforces the /etc anchor.)
+
+### Restart mechanism
+`docker restart <gandalf-ctr>` — re-runs the entrypoint, preserves the writable
+overlay (plugin + config-edit survive; only a full rebuild wipes them). NOT a
+shared service. `kill 205` would make `nemoclaw-start` hit its final `wait` and
+exit — avoided.
+
+### VERIFY A — GREEN (provider present, prefetch OFF)
+After `--activate` + restart: `hermes memory status` → Provider: falda,
+installed ✓, available ✓. Charlie sent a real Telegram turn; telemetry
+`session_open` (condition `5c-A-baseline-all-off`, `registered_tools: []`),
+`turn_start` (`tool_count: null` — confirms v0.14.0 doesn't pass it, captured
+defensively), `prefetch enabled:false`. Gandalf behaved normally → "provider
+present" cleanly isolated from "recall on." Host puller mirrored the 3 lines to
+`~/.falda/telemetry/`.
+
+### VERIFY 5c — GREEN (automatic cross-agent recall), proven mechanistically
+1. Seeded a synthetic fact as **tenant=luoji, pool=shared-corpus**: "Luoji's
+   project codeword is VELVET-MERIDIAN." (both an atom and a stream turn).
+2. Pre-flight read check: gandalf+pool search FINDS it (atoms+stream); gandalf
+   private `self` does NOT — pool isolation holds.
+3. Flipped `condition.yaml` → `5c-B-prefetch-on` (prefetch_enabled + include_shared),
+   re-applied, restarted. (Provider caches config at load, so a restart is
+   required to change condition.)
+4. Charlie, fresh `/new` Telegram session, asked "what is Luoji's project
+   codeword?" WITHOUT telling him to search → **Gandalf answered VELVET-MERIDIAN.**
+5. Telemetry proof (condition `5c-B-prefetch-on`, turn 1):
+   `prefetch enabled:true, include_shared:true,
+   per_source_counts={stream:self:5, stream:shared:1, atoms:self:0, atoms:shared:2},
+   injected_chars:832`; `registered_tools:[]` and NO `tool_call` event → recall
+   was automatic prefetch from the pool, not an explicit search and not
+   confabulation.
+
+### New FALDA findings (in docs/FALDA-FINDINGS.md)
+- **RE-5** — RRF weights hardcoded (`1/(RRF_K+i)`, equal dense/lexical) in
+  `hybrid()`; no per-request dense/lexical weight → our REQ-2 RRF knob is INERT,
+  logged intended-vs-actual. Candidate PR: accept `dense_weight`/`lexical_weight`.
+- **BUG-2 addendum** — patch 0002 is forward-only; a pre-existing orphan surfaced
+  in the `shared-corpus` POOL: seeded 1 atom, `/atoms/search` returned 2 (real +
+  phantom score-only) while `/atoms/query` correctly returned total 1. Harmless to
+  recall (real hit ranks first) but confirms the "LEFT JOIN base table, drop
+  null-content rows in search" defense-in-depth is worth shipping with 0002.
+- **CONFIRMED GOOD** — cross-agent pool recall (the headline differentiator)
+  works end-to-end via a Hermes prefetch. Neither agent's native memory has this.
+
+### Current live state
+- Condition: **`5c-B-prefetch-on`** (prefetch ON, both tools OFF,
+  system_prompt_block OFF). Provider active; gateway serving.
+- Telemetry durable at `~/.falda/telemetry/falda_provider.jsonl`.
+- Full ingestion + recall now live: taps feed FALDA; provider reads it back.
+
+### Not yet done
+- Telemetry pull timer written but **not yet installed** as a `--user` unit
+  (pulled manually during verify). Install when running the grid continuously.
+- The 2×2 ablation grid itself (flip tools/prefetch, gather telemetry) — the
+  apparatus is ready; running conditions is the research phase.
+- SOUL/MEMORY/USER file-hash sampler (REQ-1 static-context observer) — designed
+  in prep, not yet built.

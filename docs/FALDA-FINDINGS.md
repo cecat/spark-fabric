@@ -84,6 +84,26 @@ pre-existing orphans in the wild also stop surfacing without a migration.
   `stream_fts`, AND `stream_vec` all to 0 on a real 510-row tenant. The
   orphan-on-delete bug is fixed through the live HTTP path, not just in unit
   isolation.
+- **RE-5 — RRF weights are hardcoded; not configurable.** In `src/falda.ts`
+  `hybrid()`, dense and lexical rankings are fused with a fixed reciprocal-rank
+  term `1 / (RRF_K + i)` applied equally to both lists — there is no way to weight
+  dense vs lexical, and `RRF_K`/`limit*2` candidate depth are constants. For
+  anyone tuning recall (we wanted a dense/lexical weight knob for an ablation
+  harness) this can't be done without patching. **Suggestion for Rick:** accept
+  optional per-request `dense_weight`/`lexical_weight` (and maybe `rrf_k`) in the
+  search body, defaulting to today's behavior. Small, backward-compatible. We're
+  carrying the intended weights in our config and logging intended-vs-actual so
+  the gap is on the record; happy to send a PR.
+- **BUG-2 addendum — patch 0002 is forward-only; pre-existing orphans still
+  surface, now observed in a POOL.** 0002 fixes the delete *path*, but orphans
+  written before the fix remain and still appear as phantom score-only hits in
+  `/search`. Seeding ONE atom into the `shared-corpus` pool, `/atoms/search`
+  returned TWO items (the real one + a `{"score":…}` with no id/content) while the
+  authoritative `/atoms/query` correctly returned `total: 1`. So the phantom is
+  purely a search-path artifact and it affects pools, not just tenants. This is
+  exactly why the earlier "defense-in-depth" note matters: **LEFT JOIN the base
+  table in the search query and drop null-content rows** would suppress in-the-wild
+  orphans without requiring a migration. Recommend shipping that alongside 0002.
 
 ## ❓ Open questions for Rick
 
@@ -105,3 +125,11 @@ pre-existing orphans in the wild also stop surfacing without a migration.
   test: **cross-agent shared memory** (the pool) and **tiered distillation**. The
   per-agent shadow taps exist mainly to feed FALDA realistic traffic for that
   test — they are a harness, not the end state.
+- **CONFIRMED GOOD — cross-agent pool recall works end-to-end (the headline
+  differentiator).** Phase 5c: a fact authored as tenant `luoji` into the
+  `shared-corpus` pool was retrieved by tenant `gandalf` *through the pool* and
+  surfaced automatically to the Gandalf agent via a Hermes memory-provider
+  `prefetch` — the agent answered a question it could only know from FALDA, with
+  no explicit search. Pool read isolation held (the fact was absent from
+  gandalf's private `self` store, present via the pool). This is the capability
+  neither agent's native memory has, and it works.
