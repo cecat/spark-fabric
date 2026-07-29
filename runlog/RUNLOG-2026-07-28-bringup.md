@@ -583,3 +583,76 @@ done. Work lands in **Spark-Hermes** (Gandalf-specific), per the boundary.
    `github.com/cecat/*`. FALDA on `127.0.0.1:8077`, embedder `:11434`, both live.
 4. Start at **5a**: FALDA socat bridge (Spark-Hermes) + egress policy, then
    VERIFY 5a from inside the sandbox.
+
+---
+
+## Phase 5a — FALDA reachable from the Gandalf sandbox — ✅ GREEN (2026-07-28)
+
+Work landed in **Spark-Hermes** (agent-specific), per the boundary. Two parts:
+
+### 1. Socat bridge (substrate half)
+`Spark-Hermes/bringup/45-falda-bridge/gandalf-falda-bridge-openshell.service`
+```
+socat TCP-LISTEN:8077,bind=172.19.0.1,fork,reuseaddr TCP:127.0.0.1:8077
+```
+Installed as a `--user` unit (`systemctl --user enable --now`). One unit only —
+FALDA already binds host loopback, so unlike vLLM there's no second host-facing
+bridge. Verified listener: `172.19.0.1:8077` (socat). README in that dir.
+
+### 2. Egress policy (enforcement half)
+`Spark-Hermes/bringup/50-openshell-policies/falda-local-egress.yaml`, preset
+`falda-local-egress`. Applied with **`nemohermes gandalf policy-add --from-file
+… --yes`** (NOT `ops/apply-policies.sh`, which would also apply Rick's REMOTE
+`falda-egress.yaml`). → Policy **version 9 loaded**.
+
+**Schema correction vs the plan (checked the actual blueprint, didn't guess):**
+read `/opt/nemoclaw-blueprint/policies/presets/local-inference.yaml` inside the
+sandbox — the working local-HTTP pattern. Two things a naive mirror of
+`telegram-egress.yaml` would have gotten WRONG:
+- `allowed_ips: [10/8, 172.16/12, 192.168/16]` is **required** — OpenShell's SSRF
+  guard rejects private host-gateway IPs (172.19.0.1) otherwise.
+- Plain `protocol: rest` on bare port 8077 (no TLS/443 — the proxy speaks HTTP to
+  FALDA). Modeled the preset exactly on `local-inference`, not on telegram.
+
+### Enforcement model discovered (and why the plan's VERIFY was wrong)
+The Hermes gateway (PID 205, `hermes gateway run`) forces ALL egress through the
+OpenShell L7 proxy `10.200.0.1:3128` (`https_proxy`/`http_proxy` in its environ;
+`NO_PROXY=localhost,127.0.0.1,::1,10.200.0.1` — note `host.openshell.internal` is
+NOT exempt). The proxy enforces the policy **per calling principal**.
+
+Two test paths that MISLED (both recorded in the 45-falda-bridge README):
+- **Bare `docker exec … curl http://host.openshell.internal:8077/…`** → 200 even
+  with NO policy. A fresh exec shell has none of the gateway's proxy env, so it
+  bypasses enforcement. This is the plan's VERIFY 5a as written — it proves the
+  bridge, proves NOTHING about the policy. **Superseded.**
+- **`docker exec … curl -x http://10.200.0.1:3128 …`** → 403 `policy_denied`
+  even WITH the correct policy — an exec'd curl isn't in the gateway's tracked
+  process tree, so the proxy won't treat it as a principal. vLLM (known-working
+  for the real agent) 403s identically through this path.
+
+**Faithful test = `nemohermes gandalf exec`** — runs in the tracked context the
+proxy honors.
+
+### VERIFY 5a (authoritative) — PASS
+```
+$ nemohermes gandalf exec -- /usr/bin/curl -s http://host.openshell.internal:8077/healthz
+{"ok":true,"tiers":["stream","atoms","scenes","core"],"pools":true}
+$ nemohermes gandalf exec -- … -X POST …/stream/search -d '{"tenant":"gandalf","query":"ping"}'
+{"messages":[]}        # (after orphan purge below)
+```
+Control: vLLM `:8000` via the same tracked exec → 200. FALDA `:8077` via same → 200.
+
+### Incidental cleanup — pre-existing orphan vec/fts rows in gandalf tenant
+The first gandalf search returned a phantom score-only hit (`{"score":…}`, no
+id/content) — the same orphan signature patch 0002 prevents. These predate 0002
+(delete-path fix is forward-only). The gandalf tenant had **0 real rows**
+(`stream=0`, `atoms=0`) but 1 orphan in `stream_vec` + 2 in `atoms_vec`. Purged
+(with a `.bak-pre-orphan-purge` backup of the tenant db) via the bundled
+`sqlite-vec-linux-arm64/vec0.so`. Post-purge: all fts/vec counts 0; searches
+return `[]`. Clean tenant for 5b/5c.
+
+### Files (Spark-Hermes)
+- `bringup/45-falda-bridge/gandalf-falda-bridge-openshell.service` + `README.md`
+- `bringup/50-openshell-policies/falda-local-egress.yaml`
+
+**Gate: 5a GREEN. Proceeding to 5b (shadow capture, tenant gandalf).**
