@@ -1073,3 +1073,73 @@ backfilled turns — only new ones.
   5c agent). Decide separately.
 - Distiller is now a 5th self-sustaining `--user` service alongside
   ollama/falda-gateway/tap-luoji/tap-gandalf.
+
+---
+
+## Phase 7 — Sibline broker (NATS + JetStream) — ✅ VERIFY 7 GREEN (2026-07-29)
+
+The "S" of FUS. NATS + JetStream broker for background agent-to-agent
+coordination. Shared substrate → `spark-fabric/services/nats/`. Loopback-only.
+
+### Cloned the reference
+`~/code/Sibline` pin **`cab044f`** (rick-stevens-ai/Sibline) — un-vendored, like
+falda. Adapted its `broker/nats-server.conf`, `provision-streams.sh`,
+`scripts/smoke.py`. The plan's `falda/deploy/nats/` fallback also exists but the
+Sibline artifacts are the canonical source.
+
+### Binaries (pinned, no root)
+nats-server **v2.14.3** + natscli **v0.4.0**, linux-arm64, to `~/opt/nats/bin/`.
+Queried the GitHub releases API for real asset names (didn't guess URLs).
+Checksums recorded in `services/nats/README.md`.
+
+### Config — generic + secret-free (committable)
+`services/nats/nats-server.conf`: bind `127.0.0.1:4222`, monitoring
+`127.0.0.1:8222`, JetStream file store. **Every runtime value is a `$VAR`** —
+nats-server expands env in strings, PATHS, and passwords (verified with a
+correct-vs-wrong-password probe). So the committed conf has NO secrets and NO
+machine paths; the `--user` unit injects them:
+- secrets from `~/.config/sibline/cred` (0600, gitignored-by-location — it's in
+  `~/.config`, outside every repo): `NATS_ADMIN_PASS`, `GANDALF_NATS_PASS`,
+  `LUOJI_NATS_PASS` (32-char random each).
+- paths via `Environment=` (`SIBLINE_STORE_DIR=~/.sibline/jetstream`,
+  `SIBLINE_LOG_FILE=~/.sibline/logs/nats.log`).
+
+### Deltas from Rick's reference (all deliberate)
+loopback (not tailnet); users gandalf/luoji (not kukla/ollie); streams
+sibline-gandalf/luoji/broadcast; `--user` unit + `~/.sibline/` (not root +
+`/var/lib/sibline`); `$VAR` secrets (not inline REPLACE_ME).
+
+### The `$JS.>` grant (the plan's headline gotcha) — got it right first time
+Each agent user has `publish` on `sibline.>`, `_INBOX.>`, **and `$JS.>`**.
+Confirmed working: smoke.py publish + stream_info both succeed (the ack-publish
+path is what `$JS.>` gates).
+
+### VERIFY 7 — PASS
+- `sibline-broker.service` (`--user`, Restart=always) active; JetStream up;
+  listening `127.0.0.1:4222` + `:8222`, both loopback (confirmed via `ss`).
+- 3 streams created (`nats stream ls`): sibline-gandalf, sibline-luoji,
+  sibline-broadcast (file, 7d/10k/1MB, discard old, 2m dupe window).
+- `smoke.py` PASS for BOTH agents: publish acked (seq=1), JetStream stored,
+  stream_info readable. Smoke probes then purged → all streams back to 0 msgs.
+- **Sandbox reachability of :4222 — confirmed UNREACHABLE (the plan's `[ASSUMED]`,
+  now proven):**
+  - `host.openshell.internal:4222` → `Connection refused` (no socat bridge; NATS
+    deliberately has none, unlike FALDA's 5a bridge).
+  - `127.0.0.1:4222` from sandbox → `Connection refused` (sandbox loopback ≠ host).
+  - Faithful principal path `nemohermes gandalf exec … curl …:4222` → **403**
+    (no egress policy for 4222).
+  This is exactly why Gandalf needs the host-side FILE BRIDGE (Phase 8b), not
+  direct NATS. Luoji is native → speaks NATS directly (Phase 8a).
+
+### Now 6 self-sustaining `--user` services
+ollama, falda-gateway, tap-luoji, tap-gandalf, distiller-luoji, **sibline-broker**.
+
+### Reconnect-zombie gotcha (recorded for Phase 8)
+py-nats durable subscribers don't survive a broker TCP reconnect (silently stop
+delivering). After ANY broker ACL/config change: restart the broker, THEN every
+subscriber unit. To be baked into the Phase 8 runbook.
+
+### Next: Phase 8 — subscribers
+8a Luoji direct (native NATS, `~/.sibline/venv`, durable `luoji-inbox-durable`).
+8b Gandalf host-side bridge (file mailbox ↔ sandbox via docker exec, modeled on
+`Spark-Hermes/ops/outbox-processor.sh`) — lives in Spark-Hermes.

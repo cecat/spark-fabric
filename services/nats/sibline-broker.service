@@ -1,0 +1,20 @@
+[Unit]
+Description=Sibline NATS broker (JetStream, loopback-only) — spark-fabric Phase 7
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Secrets (NATS_ADMIN_PASS, GANDALF_NATS_PASS, LUOJI_NATS_PASS) — 0600, not in repo.
+EnvironmentFile=%h/.config/sibline/cred
+# Runtime paths the committed config references via $VAR (keeps the conf generic).
+Environment=SIBLINE_STORE_DIR=%h/.sibline/jetstream
+Environment=SIBLINE_LOG_FILE=%h/.sibline/logs/nats.log
+ExecStart=%h/opt/nats/bin/nats-server -c %h/code/spark-fabric/services/nats/nats-server.conf
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/.sibline/logs/broker.out
+StandardError=append:%h/.sibline/logs/broker.out
+
+[Install]
+WantedBy=default.target
