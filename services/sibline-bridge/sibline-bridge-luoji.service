@@ -1,0 +1,25 @@
+[Unit]
+Description=Sibline bridge — Luoji (host NATS client -> /workspace mailbox; sandboxed agent can't reach NATS directly)
+After=network-online.target sibline-broker.service
+Wants=network-online.target sibline-broker.service
+
+[Service]
+Type=simple
+# nats-py lives in the sibline venv (py3.12). Secrets from the 0600 cred file.
+EnvironmentFile=%h/.config/sibline/cred
+Environment=SIBLINE_AGENT=luoji
+Environment=SIBLINE_SERVER=nats://127.0.0.1:4222
+# Luoji's /workspace is a live host bind-mount, so write his mailbox + read his
+# outbox straight from the workspace — the sandbox sees both instantly, no
+# docker exec needed. (Host path -> sandbox sees it at /workspace/sibline/.)
+Environment=SIBLINE_MAILBOX_PATH=%h/code/spark-ai-agents/luoji/sibline/inbox.jsonl
+Environment=SIBLINE_OUTBOX_DIR=%h/code/spark-ai-agents/luoji/sibline/outbox
+Environment=SIBLINE_LOG_DIR=%h/.sibline/logs
+ExecStart=%h/.sibline/venv/bin/python %h/code/spark-fabric/services/sibline-bridge/sibline_bridge.py
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/.sibline/logs/sibline-bridge-luoji.out
+StandardError=append:%h/.sibline/logs/sibline-bridge-luoji.out
+
+[Install]
+WantedBy=default.target

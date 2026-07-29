@@ -1,0 +1,24 @@
+[Unit]
+Description=Sibline bridge — Gandalf (host NATS client -> host staging mailbox; a Spark-Hermes shuttle moves it into the sandbox)
+After=network-online.target sibline-broker.service
+Wants=network-online.target sibline-broker.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/sibline/cred
+Environment=SIBLINE_AGENT=gandalf
+Environment=SIBLINE_SERVER=nats://127.0.0.1:4222
+# Gandalf's /sandbox/.hermes has NO host bind-mount, so the bridge stages to
+# HOST files under ~/.sibline; the Spark-Hermes ops/sibline-shuttle.sh moves them
+# in/out of the sandbox via docker exec. (Do NOT point these at the sandbox.)
+Environment=SIBLINE_MAILBOX_PATH=%h/.sibline/mailbox-gandalf.jsonl
+Environment=SIBLINE_OUTBOX_DIR=%h/.sibline/outbox-gandalf
+Environment=SIBLINE_LOG_DIR=%h/.sibline/logs
+ExecStart=%h/.sibline/venv/bin/python %h/code/spark-fabric/services/sibline-bridge/sibline_bridge.py
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/.sibline/logs/sibline-bridge-gandalf.out
+StandardError=append:%h/.sibline/logs/sibline-bridge-gandalf.out
+
+[Install]
+WantedBy=default.target

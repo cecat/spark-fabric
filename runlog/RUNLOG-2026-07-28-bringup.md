@@ -1143,3 +1143,82 @@ subscriber unit. To be baked into the Phase 8 runbook.
 8a Luoji direct (native NATS, `~/.sibline/venv`, durable `luoji-inbox-durable`).
 8b Gandalf host-side bridge (file mailbox ↔ sandbox via docker exec, modeled on
 `Spark-Hermes/ops/outbox-processor.sh`) — lives in Spark-Hermes.
+
+---
+
+## Phase 8 — Subscribers — ✅ VERIFY 8 GREEN (2026-07-29)
+
+Both sandboxed agents now exchange messages over Sibline via host-side NATS
+bridges. Full bidirectional A2A proven, neither agent touching Telegram/Slack.
+
+### The direct-NATS spike (Charlie's "can we do the Slack trick?") — answered NO
+Charlie noted Slack reaches the sandbox in real time (no cron) and asked whether
+NATS could use the same path. Investigated the actual mechanism: Slack is
+**Socket Mode = WebSocket-over-TLS on 443**, which the OpenShell L7 proxy
+natively tunnels (`protocol: websocket` in slack.yaml). Evidence suggested the
+proxy also does raw L4 tunnels (`access: full` / `tls: skip`, used by brew/github
+— but those are TLS/443 too). **Spiked it:** socat bridge `172.19.0.1:4222` +
+an `access: full`/`tls: skip` egress policy (v10), probed from inside the sandbox
+via the faithful principal path. **Verbose socat proved the raw NATS SYN never
+arrived** — the proxy silently drops plain (non-TLS, non-443) TCP. So the plan's
+original "raw TCP can't cross the sandbox proxy" is CONFIRMED, and the Slack trick
+needs WebSocket/TLS which NATS isn't. Spike fully torn down; verified FALDA (5c)
+egress still works (only the sibline preset was removed). ~20 min, well spent.
+
+### Plan correction: BOTH agents need a bridge (not just Gandalf)
+Phase 8a says "Luoji is native, speaks NATS directly." Wrong — same Phase-0
+finding: Luoji is sandboxed, his sandbox also can't reach :4222. So both get a
+host-side bridge; they differ only in the last delivery hop.
+
+### Architecture (host-side, file-shuttle across the sandbox barrier)
+`services/sibline-bridge/sibline_bridge.py` — generic per-agent daemon (runs in
+`~/.sibline/venv`): durable JS consumers on `sibline.<self>.inbox` +
+`sibline.broadcast` → appends non-noise to a mailbox JSONL; auto-pongs `kind=ping`
+(no agent wake); watches an outbox dir → publishes agent-dropped `*.json`
+(SYMMETRY RULE: durable file first, then best-effort publish → `sent/`). Includes
+the nats-py N-digit-microsecond timestamp shim (the plan's Python gotcha).
+
+Delivery differs per agent (verified both surfaces):
+- **Luoji** — `/workspace` is a live host bind-mount, so the bridge writes the
+  mailbox straight into `~/code/spark-ai-agents/luoji/sibline/` → sandbox sees it
+  at `/workspace/sibline/` instantly. NO docker exec. Unit: spark-fabric
+  `sibline-bridge-luoji.service`.
+- **Gandalf** — `/sandbox/.hermes` is overlay (no bind), so the bridge stages to
+  host `~/.sibline/mailbox-gandalf.jsonl` and a **docker-exec shuttle**
+  (`Spark-Hermes/ops/sibline-shuttle.sh` + `gandalf-sibline-shuttle.service`,
+  modeled on outbox-processor.sh, offset-tracked no-dupe) syncs it in/out of
+  `/sandbox/.hermes/sibline/`. Units: spark-fabric `sibline-bridge-gandalf.service`
+  + Spark-Hermes shuttle.
+
+### Boundary decision (flagged to Charlie)
+CLAUDE.md says "the file bridge is Gandalf-specific → Spark-Hermes; Luoji must not
+inherit it." That rule's premise (Luoji native) is false. Followed the falda-tap
+precedent instead: the GENERIC bridge is shared substrate → spark-fabric
+(both agents' feeders sit together, as the taps do). Only Gandalf's docker-exec
+SHUTTLE is agent-specific → stays in Spark-Hermes. Reversible via git mv.
+
+### VERIFY 8 — PASS (all three)
+1. Luoji→Gandalf `kind=message` → landed in the GANDALF SANDBOX inbox
+   (`/sandbox/.hermes/sibline/inbox.jsonl`) via broker→bridge→shuttle.
+2. Gandalf→Luoji from INSIDE the sandbox (dropped `outbox/reply1.json`) → full
+   round-trip: shuttle out → bridge publish → luoji bridge → his `/workspace`.
+   A complete bidirectional A2A exchange, both sandboxed, no Telegram/Slack.
+3. Auto-pong symmetry both directions (ping→pong with correct `reply_to`,
+   answered by the peer's bridge daemon, no agent wake).
+Restart-safe: bounced all 3 units → still exactly one durable consumer each (no
+reconnect zombies). Test data purged from streams + mailboxes afterward.
+
+### Reconnect-zombie runbook — in services/sibline-bridge/README.md
+After ANY broker ACL/config change: restart broker, THEN all 3 subscriber units;
+verify a single durable consumer each.
+
+### Now 9 self-sustaining --user services
+ollama, falda-gateway, tap-luoji, tap-gandalf, distiller-luoji, sibline-broker,
+sibline-bridge-luoji, sibline-bridge-gandalf, gandalf-sibline-shuttle.
+
+### Known limitation (honest)
+Inbound to an agent lands in a mailbox file; it does NOT wake a live agent turn —
+the agent surfaces it on its next turn / poll. Auto-pong (liveness) is instant.
+Active "push into a live turn" is beyond VERIFY 8 and touches agent-side config.
+
+### Next: Phase 9 — end-to-end (the 6 checks) then extend ops/status.sh + post-rebuild.sh.
