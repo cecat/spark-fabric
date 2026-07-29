@@ -656,3 +656,116 @@ return `[]`. Clean tenant for 5b/5c.
 - `bringup/50-openshell-policies/falda-local-egress.yaml`
 
 **Gate: 5a GREEN. Proceeding to 5b (shadow capture, tenant gandalf).**
+
+---
+
+## Phase 5b — Gandalf shadow tap — ✅ GREEN (2026-07-28)
+
+Source is spark-fabric `services/falda-tap/falda_tap_hermes.py` + unit
+`falda-tap-gandalf.service` (shared substrate — a FALDA feeder). NOT yet
+installed as a service (running manually during eval; install step below).
+
+### Source-of-truth decision (plan's [ASSUMED] jsonl was wrong)
+Discovery proved the per-session `*.jsonl` files exist for only **32 of 102**
+interactive sessions (gap spread across all dates, not a format era) — tailing
+them would silently miss ~69% of conversations. The canonical, complete store is
+the sandbox SQLite DB `/sandbox/.hermes/runtime/state.db` (`messages` +
+`sessions`, FTS5). No host bind-mount, so the tap crosses via `docker exec -u
+sandbox python3` (stdlib; sandbox has no sqlite3 CLI), reads read-only
+(`mode=ro`), checkpoints on the monotonic `messages.id` PK. Filter: keep
+`source IN (telegram,slack)` user+assistant non-empty; drop `cron` (~96% of
+volume: automated inbox-triage `[SILENT]`/skill preambles — Gandalf analog of
+Luoji heartbeats) + `api_server` + tool/session_meta roles + exact `[SILENT]`.
+
+### Bug found & fixed DURING 5b (worth noting): /stream/add timeout on backfill
+First backfill run threw `TimeoutError`. Root cause: `/stream/add` embeds every
+message inline via the CPU Ollama embedder; a 99-msg / 50KB session posted in one
+shot on a cold embedder exceeded the 10s client timeout. Fix in the tap: chunk
+each session into `TAP_CHUNK=25` sub-batches and raise `TAP_POST_TIMEOUT=120`.
+(This is a CLIENT-side fix; see FALDA-FINDINGS RE for the server-side note — no
+per-request server timeout knob, embed cost is silent.) `forward()` now posts in
+strict global-id order, one POST per same-session chunk, STOPS on first failure,
+and only advances the checkpoint over fully-handled ids — no gaps/dupes on restart.
+
+### VERIFY 5b — PASS (content, not just mechanism)
+Clean single backfill: **394 rows, 22 sessions, 0 duplicates** (checkpoint
+id=24364). `stream/search tenant=gandalf "are you listening"` returns the real
+telegram line `"Hello are you listening?"` (1x). Earlier triplicates (from my
+repeated reset-and-rerun while fixing the timeout) were purged via the API delete
+path FIRST — which also drove `stream_fts`/`stream_vec` to 0, **confirming patch
+0002 works end-to-end through the gateway** (positive finding for Rick).
+
+### Install as service (when ready to run continuously)
+```
+ln -sf ~/code/spark-fabric/services/falda-tap/falda-tap-gandalf.service \
+  ~/.config/systemd/user/falda-tap-gandalf.service
+systemctl --user daemon-reload && systemctl --user enable --now falda-tap-gandalf.service
+```
+
+---
+
+## Phase 5c PREP — Charlie's two research requirements (2026-07-28)
+
+Charlie reframed Phase 5: the memory provider is **experimental apparatus** for
+studying how much of the Hermes-vs-OpenClaw behavioral difference (same model,
+same endpoint) is attributable to context/memory management. Two requirements to
+build into the FALDA provider from the start (cheap now, painful to retrofit).
+Report on observability BEFORE building 5c. Findings from reading the actual
+source (`/opt/hermes/agent/memory_provider.py`, `memory_manager.py`,
+`run_agent.py`) follow.
+
+### REQ-1 observability — WHAT'S REACHABLE FROM THE MemoryProvider ABC
+Investigated against source (NOT assumed). Provider hooks are called by
+`agent/memory_manager.py`, wired in `/opt/hermes/run_agent.py`:
+
+REACHABLE (log these directly — they ARE our provider's own outputs):
+- `system_prompt_block()` return string — OUR static block. Called at prompt
+  assembly (run_agent ~6241 via `memory_manager.build_system_prompt()`).
+- `prefetch(query, session_id)` return string + the `query` — call site
+  run_agent ~12523. **query = `original_user_message`** (clean user input, NOT
+  skill-injected `user_message` — good: stable independent variable). We control
+  the return, so we can log which FALDA tiers we hit and per-tier result counts.
+- `on_turn_start(turn_number, message)` — run_agent ~12510, fires BEFORE
+  prefetch. Gives us turn number + clean user message. NOTE: at THIS call site
+  only 2 positional args are passed (no `remaining_tokens/model/platform`
+  kwargs the ABC docstring lists as possible — so don't rely on those here).
+- `on_pre_compress(messages)` — full message list about to be compressed
+  (run_agent ~10681). `on_session_end(messages)`, `on_session_switch(...)`,
+  `on_memory_write(action,target,content,metadata)`, `on_delegation(...)`.
+- `initialize(session_id, **kwargs)` kwargs: hermes_home, platform, and maybe
+  agent_context/agent_identity/agent_workspace/parent_session_id/user_id.
+
+NOT reachable from the ABC (reported plainly, per Charlie's instruction):
+- The FULL assembled system prompt is **NOT passed to any provider hook**. It's
+  built by `AIAgent._build_system_prompt()` (run_agent ~6264) and cached at
+  `self._cached_system_prompt` (~1948) — an AIAgent instance attribute the
+  provider never receives. Our provider can see ONLY its own
+  `system_prompt_block()` contribution, not the sibling blocks (soul, skills,
+  tools, etc.) nor the final concatenation.
+- **BUT** — the full prompt IS observable WITHOUT patching /opt/hermes: Hermes
+  itself persists it. `_ensure_db_session()` (run_agent ~2551) writes
+  `system_prompt=self._cached_system_prompt` into `sessions.system_prompt` in
+  state.db. VERIFIED: all 22 telegram/slack sessions have it populated (max len
+  18474; sample begins with the SOUL canary). So the provider (or a sidecar) can
+  read the full assembled prompt per session_id from state.db read-only — no
+  patch, survives rebuilds. This is the answer to Charlie's core question.
+- Do NOT patch /opt/hermes for visibility (rebuild wipes writable layer) — not
+  needed given the state.db route.
+
+### REQ-2 config-driven knobs — NATIVE MECHANISM EXISTS
+The ABC has `get_config_schema()` + `save_config(values, hermes_home)`, driven by
+`hermes memory setup`. That's for SETUP prompting, writes to provider's native
+config location. For an ABLATION HARNESS the cleaner path: provider reads a
+versioned config FILE at init (in Spark-Hermes), so "one file + restart" = one
+condition. Knobs to expose (no magic numbers): retrieval top-k per tier; RRF
+dense/lexical weights; which tiers prefetch consults + a prefetch-OFF baseline;
+max chars injected/turn; free-text experiment/condition label stamped into every
+log line. Same treatment later for distiller knobs (phase 6): L1_EVERY_N,
+L2_INTERVAL_S, L3_INTERVAL_S, chunk window.
+
+### Telemetry logs = DATA not code
+Write per-turn logs OUTSIDE any repo: `~/.falda/telemetry/`, mode 0600,
+gitignored (they contain Charlie's conversations). Per turn log: exact
+system_prompt_block() string; exact prefetch() string + its query + tiers hit +
+per-tier counts; turn number, session_id, timestamp, condition label; and a hash
+of each big string so unchanged turns are cheap.

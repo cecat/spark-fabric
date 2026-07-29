@@ -1,0 +1,24 @@
+[Unit]
+Description=FALDA shadow tap — Gandalf (Hermes state.db -> FALDA /stream/add)
+After=network-online.target falda-gateway.service docker.service
+Wants=network-online.target
+# Best-effort against the gateway; the tap self-heals if FALDA is down.
+Wants=falda-gateway.service
+
+[Service]
+Type=simple
+# Stdlib-only — system python3 is fine and deliberately NOT the sibline venv.
+# Reads the sandbox's canonical store via `docker exec` (no host mount exists),
+# so the host user must be able to run docker (same as ops/outbox-processor.sh).
+Environment=HERMES_CONTAINER_PREFIX=openshell-gandalf-
+Environment=HERMES_STATE_DB=/sandbox/.hermes/runtime/state.db
+Environment=FALDA_URL=http://127.0.0.1:8077
+Environment=FALDA_TENANT=gandalf
+ExecStart=/usr/bin/python3 %h/code/spark-fabric/services/falda-tap/falda_tap_hermes.py
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/.falda/tap_gandalf.log
+StandardError=append:%h/.falda/tap_gandalf.log
+
+[Install]
+WantedBy=default.target
