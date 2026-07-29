@@ -523,3 +523,63 @@ Log `~/.falda/tap_luoji.log`; checkpoint `~/.falda/tap_state_luoji.json`.
 **Phase 4 gate: GREEN.** Shadow only — OpenClaw `memory.provider` NOT flipped.
 Mention-gating remains an open `spark-ai-agents` item (operator's), independent
 of the tap. Stopping before Phase 5 (Gandalf) per the gating rule.
+
+---
+
+## Phase 5 — Gandalf. STARTING STATE / HANDOFF (context reset 2026-07-28)
+
+Written before a `/compact` at ~100% context. Phase 5 not yet begun; discovery
+done. Work lands in **Spark-Hermes** (Gandalf-specific), per the boundary.
+
+### Decisions locked in
+- **Snapshot is NOT a gate.** `ops/snapshot.sh` / `nemohermes gandalf snapshot
+  create` is **broken** — empty output (`backedUpDirs: []`; only `SOUL.md` +
+  manifest; all 14 state dirs + `runtime/state.db` fail). Pre-existing, not
+  caused by us. Operator decision: **Gandalf is disposable** — memories/sessions
+  expendable, identity `.md` files are in Git — so proceed without a snapshot.
+  Optional near-free insurance: `tar` `/sandbox/.hermes` to keep the sandbox
+  `.env` secrets (Telegram/Tavily; also in host `~/.hermes/.env`). A
+  `.tirith-install-failed: download_failed` marker in the sandbox may relate to
+  the snapshot tooling — operator's Spark-Hermes territory, not fabric.
+
+### Discovery that rewrites 5a (plan's `[ASSUMED]` was wrong)
+- Plan assumed `host.openshell.internal:8077` just works. **It won't yet.** The
+  sandbox (`172.19.0.2`, bridge `openshell-docker` = `br-a89074d4fc78`) reaches
+  host services ONLY via socat bridges on **`172.19.0.1`**. vLLM/litellm/argo
+  already have them (`:8000/:4000/:44497`). FALDA is loopback-only, so **`:8077`
+  has no bridge**. `host.openshell.internal` → `172.19.0.1`, so
+  `host.openshell.internal:8077` fails until a bridge exists.
+- **5a therefore needs TWO things:** (1) a FALDA socat bridge on
+  `172.19.0.1:8077` — mirror
+  `Spark-Hermes/bringup/40-vllm-bridge/gandalf-vllm-bridge-openshell.service`
+  (`socat TCP-LISTEN:8077,bind=172.19.0.1,fork,reuseaddr TCP:127.0.0.1:8077`),
+  install as a `--user` unit in **Spark-Hermes**; (2) the egress policy
+  `bringup/50-openshell-policies/falda-local-egress.yaml` mirroring
+  `telegram-egress.yaml`, applied via `ops/apply-policies.sh`. **Do NOT touch**
+  the existing `falda-egress.yaml` (Rick's remote proxy `103.101.203.226:8444`).
+- `172.19.0.1` is a docker-bridge iface, **not** off-box — same exposure profile
+  as the existing bridges; L7 egress policy still gates the sandbox. Safe.
+- **VERIFY 5a:** `docker exec -u sandbox
+  openshell-gandalf-354307c9-7df4-47a5-9b86-f6ae0a81ae9e curl -s
+  http://host.openshell.internal:8077/healthz` → `{"ok":true,...}`.
+
+### Still ahead
+- **5b** shadow capture, tenant `gandalf`. Find Hermes L0 session log (ASSUMED
+  `/sandbox/.hermes/`, confirm). Prefer host path if a volume exposes it, else a
+  `docker exec` poller like `ops/outbox-processor.sh`. Reuse the Phase-4 tap
+  approach but for the Hermes format.
+- **5c** FALDA as Gandalf's real memory. `/opt/hermes/agent/memory_provider.py`
+  ABC confirmed to exist. Map `sync_turn`→`/stream/add`, `prefetch`→search,
+  `system_prompt_block`→`/core/read`. Tenant `gandalf`, pool `shared-corpus`.
+  Shadow first, then prefetch. Provider source in Spark-Hermes behind an apply
+  script — NEVER hand-place in the container (rebuild wipes it). VERIFY 5c: a
+  fresh `/new` session recalls a `shared-corpus` fact (from a Luoji conversation)
+  WITHOUT being told to search.
+
+### Resume checklist
+1. Read this section + `git log` (spark-fabric through Phase 4, all pushed).
+2. Memory note `project_spark_fabric_bringup.md` has the same state.
+3. Do NOT restart vLLM / argo-shim. All four repos under `~/code`, remotes
+   `github.com/cecat/*`. FALDA on `127.0.0.1:8077`, embedder `:11434`, both live.
+4. Start at **5a**: FALDA socat bridge (Spark-Hermes) + egress policy, then
+   VERIFY 5a from inside the sandbox.
