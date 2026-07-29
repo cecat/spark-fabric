@@ -1,0 +1,21 @@
+[Unit]
+Description=FALDA shadow tap — Luoji (OpenClaw session JSONL -> FALDA /stream/add)
+After=network-online.target falda-gateway.service
+Wants=network-online.target
+# Best-effort against the gateway; the tap self-heals if FALDA is down.
+Wants=falda-gateway.service
+
+[Service]
+Type=simple
+# Stdlib-only — system python3 is fine and deliberately NOT the sibline venv.
+Environment=SOURCE_CONV_DIR=%h/.openclaw-sessions/luoji
+Environment=FALDA_URL=http://127.0.0.1:8077
+Environment=FALDA_TENANT=luoji
+ExecStart=/usr/bin/python3 %h/code/spark-fabric/services/falda-tap/falda_tap_openclaw.py
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/.falda/tap_luoji.log
+StandardError=append:%h/.falda/tap_luoji.log
+
+[Install]
+WantedBy=default.target

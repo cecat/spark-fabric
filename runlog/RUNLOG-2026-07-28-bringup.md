@@ -462,3 +462,64 @@ authoritative `/query` route is unaffected. This would have bitten the Phase 4/5
 No secrets. Stopping before Phase 4 (Luoji shadow capture) per the gating rule —
 note Phase 4 still needs the OpenClaw-session format adapter and will use the
 host-mounted session path from the Option B bind-mount.
+
+---
+
+## Phase 4 — Luoji shadow capture. VERIFY 4 GREEN.
+
+Done **2026-07-28**. Shadow tap tailing Luoji's OpenClaw session JSONL →
+FALDA `/stream/add` tenant `luoji`. OpenClaw stays authoritative; his own
+`memory/*.md` is untouched and unaware of FALDA (shadow, not live).
+
+### The format adapter (the known Phase-4 unknown)
+
+falda's `falda_tap.py` assumes flat `{sessionKey, role, content}` lines.
+OpenClaw's format is an event log: only `type=="message"` events carry a turn,
+nested under `message.{role,content}`, where `content` is a string (user) or a
+list of blocks (assistant/tool). Wrote a dedicated adapter,
+`services/falda-tap/falda_tap_openclaw.py`, keeping falda's byte-offset
+checkpoint design and adding OpenClaw parsing + filters. Reads the Option B
+host-mounted path `~/.openclaw-sessions/luoji`.
+
+### Capture-scope decisions (operator)
+
+- **user + assistant only.** `toolResult` dropped — measured at ~79% of byte
+  volume (36k vs 10k chars), pure log/file-dump noise that would bloat T0 and
+  degrade distillation.
+- **heartbeat turns filtered** (`[OpenClaw heartbeat poll]` / `HEARTBEAT_OK`) —
+  cron noise.
+- assistant `toolCall`-only turns (no text) naturally excluded (flatten to
+  empty). Verified all 45 such skips were genuinely textless, not lost content.
+
+### VERIFY 4
+
+- **4a capture:** backfilled **94** real turns on first poll; searchable
+  (`/stream/search` "favorite color" returns the prior DM). ✓
+- **4b restart safety:** restarted the unit — count held at 94, zero
+  duplication; checkpoint (`~/.falda/tap_state_luoji.json`) intact. ✓
+- **4c live round-trip:** operator sent Luoji "remember codeword
+  TANGERINE-CANYON" (addressed explicitly to LUOJI, which got past the
+  still-unfixed mention-gating). New session `bc01033f` on disk → tap captured
+  **3 turns** (96→99) → **TANGERINE-CANYON searchable in FALDA tenant luoji**.
+  Same session's `toolResult`/tool-call/write events were correctly excluded —
+  live proof the filters work. ✓
+
+### Process note (my error, recorded)
+
+Earlier in this phase I misread a monitor event: a `mirrored 2 turns` at 19:09
+was Luoji's 15-min **heartbeat** cycle, not the operator's test message — the
+operator was away and had sent nothing. I wrongly reported "the test didn't
+work" and chased a non-existent message. Lesson: a tap-fired event ≠ the
+specific message I was expecting; **verify captured content**, not just that the
+tap fired. The real round-trip (above) was then done deliberately with baseline
++ content verification.
+
+### Deliverables
+
+`services/falda-tap/`: `falda_tap_openclaw.py`, `falda-tap-luoji.service`
+(`--user`, `Restart=always`, stdlib python3 — NOT the sibline venv), README.
+Log `~/.falda/tap_luoji.log`; checkpoint `~/.falda/tap_state_luoji.json`.
+
+**Phase 4 gate: GREEN.** Shadow only — OpenClaw `memory.provider` NOT flipped.
+Mention-gating remains an open `spark-ai-agents` item (operator's), independent
+of the tap. Stopping before Phase 5 (Gandalf) per the gating rule.
