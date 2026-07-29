@@ -934,7 +934,77 @@ present" cleanly isolated from "recall on." Host puller mirrored the 3 lines to
 ### Not yet done
 - Telemetry pull timer written but **not yet installed** as a `--user` unit
   (pulled manually during verify). Install when running the grid continuously.
-- The 2×2 ablation grid itself (flip tools/prefetch, gather telemetry) — the
-  apparatus is ready; running conditions is the research phase.
 - SOUL/MEMORY/USER file-hash sampler (REQ-1 static-context observer) — designed
   in prep, not yet built.
+
+---
+
+## Phase 5c — ablation grid, first run — ✅ (2026-07-29)
+
+Ran the 2×2 (prefetch × search_tool; share held off) with an automated driver.
+Runner: `Spark-Hermes/ops/run-ablation-grid.sh`. Per cell: rewrite
+`condition.yaml` → apply → `docker restart` → wait for api_server health → POST 3
+recall probes → pull telemetry. Provider telemetry (condition-stamped) is the
+measurement.
+
+### Driver mechanics (things that mattered)
+- **api_server is in the gateway's OWN network namespace.** It binds
+  `127.0.0.1:18642` inside netns `4026534453`; a plain `docker exec` shell is in a
+  different netns → connection refused. Reach it with `nsenter -t <gw_pid> -n
+  curl …`. The gw pid changes every restart — re-resolve it each poll.
+- **Session contamination guard.** api_server derives `session_id =
+  sha256(system_prompt + first_user_message)` (`_derive_chat_session_id`), and
+  `X-Hermes-Session-Id` needs an API key (none set). So identical probe text
+  across cells would collide and load stale history. Fix: prefix each probe with
+  `[grid:<cell>:<label>]` → unique, empty-history session per (cell×probe).
+- **Cron is the only other traffic** and it skips the provider (`skip_memory`),
+  so it doesn't pollute telemetry — but a cron job running during startup delays
+  the api_server bind, so the health wait must be patient (used 120×2s).
+
+### Probes (answers pre-seeded in FALDA)
+- Q1 codeword → VELVET-MERIDIAN (shared-corpus pool)
+- Q2 ticket → 4471 (gandalf PRIVATE tenant — tests self-tier)
+- Q3 deploy window → Thursday 1400 UTC (shared-corpus pool)
+
+### Results — behavior × telemetry (the whole point)
+
+| Cell | prefetch | search tool | Q1 codeword | Q2 ticket | Q3 deploy | telemetry |
+|---|---|---|---|---|---|---|
+| **P0S0** | off | off | ❌ "don't know" | ❌ | ❌ | prefetch enabled=false ×3; no tools registered; 0 tool calls |
+| **P1S0** | **on** | off | ✅ VELVET-MERIDIAN | ✅ 4471 | ✅ Thu 1400 | prefetch fired ×3, injected 1998/808/1459 chars, 4 shared-hits/turn |
+| **P0S1** | off | **on** | ~ hedged* | ❌ | ❌ | prefetch off; `falda_search` **registered**; fired **1×** of 3 |
+| **P1S1** | **on** | on | ✅ VELVET-MERIDIAN | ✅ 4471 | ✅ Thu 1400 | prefetch fired ×3 (same as P1S0); tool registered but **0 calls** |
+
+\* P0S1 codeword: model said *"Prior sessions answered VELVET-MERIDIAN … I have
+no verification"* — a hedge referencing training/other context, NOT a clean
+recall. Telemetry shows `falda_search` fired on exactly ONE of the three P0S1
+sessions (the codeword one); ticket + deploy fired no tool and returned
+"don't know."
+
+### Findings (research signal, first pass)
+1. **Prefetch is the decisive lever.** P0S0→P1S0 flips all three probes from
+   "don't know" to correct, with zero tool use — automatic injection alone
+   accounts for the recall. Both scopes work (private self-tier AND shared pool).
+2. **An available search tool is largely NOT self-invoked.** In P0S1 Gandalf
+   reached for `falda_search` only 1/3 times and otherwise answered "I don't
+   know" rather than digging. So *having* a memory tool ≠ *using* it; passive
+   prefetch >> active tool for surfacing facts the model doesn't know it's
+   missing. (Candidate hypothesis for the Hermes-vs-OpenClaw behavioral delta.)
+3. **When prefetch is on, the tool is redundant.** P1S1 == P1S0 behaviorally and
+   the tool fired 0×: the fact was already in context, so no reason to search.
+4. **Injected-char volume varies by query** (808–1998) at fixed top-k — RRF
+   returns different-length hits; the `max_chars_per_turn=2000` cap was
+   approached (1998) but not exceeded. Knob works.
+5. **Security posture is visible in telemetry-adjacent behavior:** Gandalf
+   flagged the `[grid:…]` probe prefix as a possible injection on the ticket
+   probe — worth remembering that instrumentation prefixes leak into the model's
+   view and can change behavior. For clean runs, keep tags minimal/plausible.
+
+### Artifacts
+- Runner: `Spark-Hermes/ops/run-ablation-grid.sh` (committed with results).
+- Raw data: `~/.falda/telemetry/falda_provider.jsonl` (filter `condition=grid-*`);
+  behavioral answers in `~/.falda/grid-run.log`. Both 0600, outside all repos.
+
+### Live state after the grid
+Condition left at **`grid-P1S1`** (last cell run: prefetch on, search tool on).
+To return to a chosen steady state, edit `condition.yaml` + re-apply + restart.
