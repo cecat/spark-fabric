@@ -769,3 +769,55 @@ gitignored (they contain Charlie's conversations). Per turn log: exact
 system_prompt_block() string; exact prefetch() string + its query + tiers hit +
 per-tier counts; turn number, session_id, timestamp, condition label; and a hash
 of each big string so unchanged turns are cheap.
+
+### Phase 5c PREP addendum — full hook surface verified against source (Hermes v0.14.0)
+Charlie confirmed (read upstream) the full system prompt reaches NO hook — agreed,
+stop looking, use the state.db route. He wants the ENTIRE observable surface
+instrumented even where the provider is functionally a no-op. Verified each hook's
+ACTUAL call-site args in this deployed version:
+
+- **on_turn_start(turn_number, message, **kwargs)** — call site run_agent.py:12510
+  passes ONLY `(self._user_turn_count, _turn_msg)`. The manager wrapper
+  (memory_manager.py:379) forwards `**kwargs` faithfully, BUT the run_agent call
+  site supplies none. So in v0.14.0 the docstring's promised
+  `remaining_tokens/model/platform/tool_count` DO NOT ARRIVE at gateway turns.
+  → Report to Charlie: NOT populated here. Log them defensively
+  (`kwargs.get(...)`) so we capture them if/when a future version adds them, but
+  don't count on them. (model/platform we already know from initialize().)
+- **on_pre_compress(messages)** — run_agent.py:10681, passes the full `messages`
+  list about to be compressed, NO kwargs. We can log len(messages) + a token
+  estimate + our returned contribution. This is the compaction-content observer.
+- **on_session_switch(new_sid, parent_session_id, reset, reason)** — run_agent.py
+  :10789 fires on compression with `reason="compression"`, `reset=False`,
+  parent=old sid. So: pre_compress (what's discarded) + session_switch
+  (reason=compression, chains old→new sid) together = full compaction-event
+  record. `reset=True` distinguishes /new//reset from /resume//branch.
+- **on_memory_write(action, target, content, metadata)** — run_agent.py:10972,
+  fires on built-in MEMORY.md/USER.md tool writes (action add/replace). Instrument
+  it → the COMPETING native memory system is observed too, not just FALDA.
+- **on_session_end(messages)** — full conversation history at session boundary;
+  log for post-hoc analysis.
+
+**Independent static-context sampler (no Hermes hooks):** periodically hash
+SOUL.md / MEMORY.md / USER.md and log on change. These are the static-context
+record. Locations to confirm at build: sandbox `/sandbox/.hermes/SOUL.md` (present),
+MEMORY.md/USER.md under `/sandbox/.hermes/memories/` (dir seen in 5b). Sampler
+runs host-side (like the tap) or as a tiny timer; writes to ~/.falda/telemetry/.
+
+Net 5c telemetry plan: provider logs its own system_prompt_block + prefetch
+(query, tiers, per-tier counts, returned text) + every hook above; a state.db
+reader captures the full assembled `sessions.system_prompt` per session_id; a
+file-hash sampler captures SOUL/MEMORY/USER drift. All → ~/.falda/telemetry/
+(0600, gitignored), each line stamped with the config condition label.
+
+### 5b — installed as background service (2026-07-28 22:19)
+`falda-tap-gandalf.service` enabled + active (survives reboot). Verified single
+process, 394 rows unchanged on service start (checkpoint idempotency held — no
+dupes). Confirmed the full ingestion layer is now self-sustaining, all --user,
+all enabled:
+- ollama.service (embedder) · falda-gateway.service (store)
+- falda-tap-luoji.service (Luoji→FALDA, still live) · falda-tap-gandalf.service (Gandalf→FALDA)
+Both agents' telegram/slack + OpenClaw conversations mirror to FALDA continuously.
+This is the "just works" steady state Charlie wanted BEFORE any research
+experiments. Next: 5c FALDA memory provider (built as experimental apparatus per
+the REQ-1/REQ-2 prep above).
