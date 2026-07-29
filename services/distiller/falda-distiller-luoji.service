@@ -1,0 +1,20 @@
+[Unit]
+Description=FALDA distiller — Luoji (T0 stream -> T1 atoms -> T2 scenes -> T3 core, via Argo/Opus)
+After=network-online.target falda-gateway.service
+Wants=network-online.target falda-gateway.service
+# Depends on LiteLLM (:4000 -> argo-shim -> Argo). LiteLLM is a shared service we
+# do NOT manage here; if it's down the distiller logs + retries (no vLLM fallback).
+
+[Service]
+Type=simple
+# stdlib-only python3 (same as the taps; NOT the sibline venv).
+# Env carries FALDA_URL=:8077, LLM route, tenant=luoji, and the L1/L2/L3 knobs.
+EnvironmentFile=%h/.config/falda/distiller-luoji.env
+ExecStart=/usr/bin/python3 %h/code/falda/falda_distiller.py
+Restart=always
+RestartSec=30
+StandardOutput=append:%h/.falda/distiller-luoji.log
+StandardError=append:%h/.falda/distiller-luoji.log
+
+[Install]
+WantedBy=default.target

@@ -1006,5 +1006,70 @@ sessions (the codeword one); ticket + deploy fired no tool and returned
   behavioral answers in `~/.falda/grid-run.log`. Both 0600, outside all repos.
 
 ### Live state after the grid
-Condition left at **`grid-P1S1`** (last cell run: prefetch on, search tool on).
-To return to a chosen steady state, edit `condition.yaml` + re-apply + restart.
+Condition set to **`5c-live-full`** (prefetch + search + share all ON) as the
+everyday running state. To change: edit `condition.yaml` + re-apply + restart.
+
+---
+
+## Phase 6 — Distiller (T0→T1→T2→T3) — ✅ VERIFY 6 GREEN (2026-07-29)
+
+Stood up the distiller sidecar that promotes FALDA stream turns up the tiers via
+Argo/Opus. Deliverables in spark-fabric `services/distiller/` (config + unit +
+README only; the script is un-vendored at `~/code/falda/falda_distiller.py`, pin
+`c9f14bc`).
+
+### Prereqs verified (not assumed)
+- LiteLLM live on `:4000`; `claudeopus47` is a real model_name in
+  `Spark-Hermes/litellm/config.yaml` (→ anthropic/claudeopus47, dummy key). No
+  master key. **Cheap round-trip through the exact distiller route
+  (`:4000/v1/chat/completions` → argo → Opus) returned the canary** before first
+  run. (Charlie: the route is reachable — this Claude Code session uses it.)
+
+### Two script defaults that WOULD misconfigure (overridden in env)
+- `FALDA_URL` defaults to `:8078`; our gateway is **:8077**.
+- `DISTILLER_MODEL` defaults to `gpt-4o-mini`; must be **claudeopus47**.
+Both set in `services/distiller/distiller.env.template` →
+`~/.config/falda/distiller-luoji.env` (0600). Recorded as FALDA findings.
+
+### No vLLM fallback — already correct
+On an Argo error the script logs + returns 0 for that tier and retries next poll
+— exactly the plan's "retry/resume, not fall back to vLLM." No patch needed.
+
+### Shadow-vs-live nuance (important, per-tenant)
+The script docstring says distilled atoms are "pure shadow." True for **luoji**
+(no memory provider) but **NOT for gandalf** — the 5c provider's prefetch reads
+gandalf atoms, so a gandalf distiller would feed the live agent. So **luoji is
+the clean VERIFY 6 target**, and a gandalf distiller is deferred as part of the
+5c experimental surface (not turned on blindly).
+
+### VERIFY 6 — GREEN (quality judged, not just mechanism)
+`--once` backfill over luoji: **121 turns → 14 atoms → 1 scene → 1 core**, all
+tiers via Opus. Atoms are genuinely sensible and correctly typed:
+- persona: "LuoJi operating under the OpenClaw gateway, identity-linked to
+  ChatCeC"; "Charlie uses codeword TANGERINE-CANYON for LUOJI" (the real Phase-4
+  codeword, distilled from captured history).
+- instruction: "when smoke tests pass, skip DM and proceed to Step 6/7";
+  "consolidate duplicate health reports into one alert."
+- episodic: the real 2026-07-10 consolidated-health-alert incident, with
+  root-cause detail.
+No pleasantries/transient chatter. `/atoms/search tenant=luoji` returns
+score-ranked hits. T2 scene = coherent narrative of the incident; T3 core = a
+usable persona profile (Identity/Environment/Preferences/Constraints).
+
+### New finding
+- T3 core came wrapped in a ```` ```markdown ```` fence the L3 prompt didn't ask
+  for (cosmetic; the model added a code fence). Noted in FALDA-FINDINGS.
+
+### Continuous unit installed
+`services/distiller/falda-distiller-luoji.service` (`--user`, `Restart=always`,
+stdlib python3) enabled + active (PID confirmed, clean loop: falda=:8077
+tenant=luoji model=claudeopus47 L1_EVERY_N=10 L2=3600s L3=21600s poll=120s).
+The `--once` run already advanced the checkpoint
+(`~/.falda/distiller_state-luoji.json`: 14/1/1), so the loop won't re-distill the
+backfilled turns — only new ones.
+
+### Not done / deferred
+- **gandalf distiller instance** — deliberately NOT started (would feed the live
+  5c agent). Decide separately.
+- Distiller is now a 5th self-sustaining `--user` service alongside
+  ollama/falda-gateway/tap-luoji/tap-gandalf.

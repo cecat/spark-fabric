@@ -104,6 +104,24 @@ pre-existing orphans in the wild also stop surfacing without a migration.
   exactly why the earlier "defense-in-depth" note matters: **LEFT JOIN the base
   table in the search query and drop null-content rows** would suppress in-the-wild
   orphans without requiring a migration. Recommend shipping that alongside 0002.
+- **RE-6 — `falda_distiller.py` default endpoint + model are wrong for a real
+  deploy (silent misconfig).** The sidecar defaults `FALDA_URL=http://localhost:8078`
+  (the gateway's default port is **8077**, so out of the box the distiller talks to
+  nothing) and `DISTILLER_MODEL=gpt-4o-mini` (the plan's intended route is Opus;
+  the default would 404 on an Argo-only proxy). Both are env-overridable and we set
+  them, but the defaults will bite anyone who runs it unconfigured. **Suggestion:**
+  default `FALDA_URL` to `:8077` to match the gateway, and either drop the model
+  default (fail fast if unset) or document it loudly. Low effort.
+- **RE-7 — distiller L3 core wrapped in a markdown code fence.** The T3 `/core`
+  document came back wrapped in a ```` ```markdown … ``` ```` fence the `L3_SYS`
+  prompt never requested — the model added it. Cosmetic (readers get a literal
+  fenced block), but if anything parses/re-embeds the core it's noise. **Suggestion:**
+  strip a leading/trailing fence in the distiller after the LLM call, or tighten
+  the prompt ("no code fences"). Client-side, not a FALDA-core issue. **CONFIRMED
+  GOOD alongside it:** extraction QUALITY was high — 121 luoji turns → 14 correctly
+  typed atoms (persona/episodic/instruction), a coherent scene, and a usable core,
+  with no pleasantry/transient noise. The chunked L1 (`L1_CHUNK_TURNS`) approach
+  avoided the under-extraction the README warns about.
 
 ## ❓ Open questions for Rick
 
