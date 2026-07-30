@@ -135,6 +135,23 @@ pre-existing orphans in the wild also stop surfacing without a migration.
 - **Q-3 — pool write semantics.** For a shared pool (`shared-corpus`,
   both agents readwrite), how are concurrent writes from two processes
   serialized? SQLite busy-timeout? Any risk under simultaneous `/stream/add`?
+- **Q-4 — atoms carry no authorship; shared-pool provenance is lost.** An atom has
+  exactly six fields (`id, type, content, background, created_at, updated_at`) —
+  there is no field for *which agent asserted it*. For a private tenant that's
+  implicit (the tenant is the author), but the moment an atom lives in a shared
+  pool that **both** agents write to (`shared-corpus`), FALDA no longer records
+  who contributed it. This surfaced building a FALDA→UMP export (Phase 11): UMP
+  records have a first-class `provenance{actor, actor_kind, method}` block, and
+  because FALDA drops the author on the shared path, the mirror can only honestly
+  stamp `actor_kind=import` (a bulk import by the shared owner) rather than
+  attribute the real agent. Not a bug — private-engine use doesn't need it — but
+  for FALDA's *differentiator* (cross-agent shared memory) and for anything that
+  exports/audits shared facts, it's a real gap. **Suggestion for Rick:** record an
+  author/principal on write (at least for pool writes) — e.g. an optional
+  `author`/`actor` on `/stream/add` + `/atoms/upsert`, persisted on the atom and
+  returned on query. Backward-compatible (nullable). Would let a shared pool feed a
+  portable/interchange layer with true provenance instead of `import`. Companion to
+  [RE-5] (both are "shared/portable scenarios want a field FALDA doesn't carry").
 
 ## 💡 Ideas / integration notes (not FALDA bugs)
 
