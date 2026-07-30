@@ -1222,3 +1222,47 @@ the agent surfaces it on its next turn / poll. Auto-pong (liveness) is instant.
 Active "push into a live turn" is beyond VERIFY 8 and touches agent-side config.
 
 ### Next: Phase 9 — end-to-end (the 6 checks) then extend ops/status.sh + post-rebuild.sh.
+
+---
+
+## Phase 9 — End-to-end — ✅ VERIFY 9 GREEN, all 6 checks (2026-07-29)
+
+The whole point. All six plan checks pass:
+
+1. **A2A over Sibline both ways** ✓ — Gandalf (from inside his sandbox) → Luoji's
+   `/workspace`, then Luoji → Gandalf's sandbox inbox. Neither via Telegram/Slack.
+2. **Both agents captured to own FALDA tenants** ✓ — taps active, checkpoints
+   advancing (luoji stream=132, gandalf stream=408 at check time).
+3. **Luoji shared-corpus fact readable by Gandalf** ✓ — seeded a fact as
+   tenant=luoji pool=shared-corpus; Gandalf read it back through the pool.
+4. **Gandalf-private NOT visible to Luoji** ✓ — a gandalf-tenant secret was
+   absent from BOTH Luoji's private search and the shared pool; control confirmed
+   Gandalf sees his own. Isolation holds. (Test atoms cleaned after.)
+5. **Survives reboot** ✓ — all 9 --user units are active AND enabled, and
+   `Linger=yes` (units start at boot without login). Enablement + linger is the
+   accepted proxy; an actual reboot is Charlie's call.
+6. **One-command health** ✓ — new `spark-fabric/ops/status.sh` reports the whole
+   substrate (9 services + FALDA/embedder + Sibline streams/consumers) → ALL
+   GREEN, exit 0.
+
+### ops/status.sh — new, fabric-wide (check 6)
+Put the substrate health check in **spark-fabric** (not bloating Spark-Hermes's
+Gandalf-only status.sh). Covers: every --user unit active+enabled, linger on,
+FALDA healthz, embedder version, per-tenant stream/atom counts, broker listening,
+all 3 streams present, durable consumers single (reconnect-zombie guard). Exit
+non-zero on any failure.
+
+### post-rebuild.sh — extended for Sibline (Spark-Hermes)
+Added step 5c: a sandbox rebuild wipes the overlay `/sandbox/.hermes/sibline/`
+tree and changes the container id; the host-side broker/bridge survive (--user),
+but the docker-exec shuttle caches the container name at launch, so it's
+restarted to rebind + recreate the tree. (FALDA egress preset already restored by
+apply-policies.sh; the sibline broker is loopback host-side, no sandbox egress.)
+
+### FUS COMPLETE: F✅ S✅ (U is Phase 10, optional)
+9 self-sustaining --user services; both sandboxed agents share memory (FALDA +
+shared-corpus pool + distillation) and coordinate over a message bus (Sibline),
+all self-hosted and loopback-only. The core deliverable of the plan is met.
+
+### Next: Phase 10 — UMP (OPTIONAL, memory interchange format / MCP server).
+Note the known port collision: plan's example wants :4000 but LiteLLM owns it.
