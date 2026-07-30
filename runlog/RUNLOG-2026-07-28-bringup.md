@@ -1336,3 +1336,129 @@ All three of Rick's components replicated, self-hosted, loopback-only:
 FALDA (memory engine + shared pool + distillation), UMP (interchange format),
 Sibline (message bus). 10 self-sustaining --user services. Both sandboxed agents
 share memory and coordinate. Phase 10 was the last plan phase.
+
+---
+
+## CHECKPOINT (2026-07-30) — status: Phases 0–11 DONE (Phase 11 built post-compaction)
+
+Originally written at 100% context before a compaction with Phase 11 as the
+active work; Phase 11 was then built and verified green (see its section below).
+**Current position: all plan phases 0–11 complete (FUS built: FALDA + UMP +
+Sibline, and the FALDA→UMP mirror that gives UMP content).** The 5c section below
+is HISTORY — the Phase 5c memory-provider design decisions from this session,
+recorded because the reasoning matters for the ablation research. It is NOT
+current status; 5c shipped and is live.
+
+### 5c (HISTORY) — what was BUILT (all committed + pushed, live)
+FALDA is Gandalf's external Hermes memory provider. Deliverables in Spark-Hermes:
+`gandalf/plugins/falda/{__init__.py,plugin.yaml,condition.yaml}`,
+`ops/apply-memory-provider.sh` (wired into `post-rebuild.sh`),
+`ops/pull-telemetry.sh` + `bringup/45-falda-bridge/gandalf-telemetry-pull.{service,timer}`,
+`gandalf/skills/falda-memory/SKILL.md`. VERIFY 5c GREEN (cross-agent recall proven:
+seeded a luoji shared-corpus fact, Gandalf recalled it in a fresh session via
+prefetch, telemetry-confirmed not confabulation). Live condition currently
+`5c-live-full` (prefetch + search + share all ON).
+
+### 5c (HISTORY) — deferred follow-ups (optional, none blocking Phase 11)
+- **Telemetry pull TIMER not installed** as a --user unit (pulled manually so far).
+  Files exist; `systemctl --user enable --now gandalf-telemetry-pull.timer` when
+  running conditions continuously.
+- **The 2×2 ablation RUNS** — apparatus + runner (`Spark-Hermes/ops/run-ablation-grid.sh`)
+  exist and a first pass ran; systematic runs are the research, separate from bringup.
+- **SOUL/MEMORY/USER file-hash sampler** (REQ-1 static-context observer) — designed
+  in 5c PREP, not built.
+- **Gandalf distiller instance** — deliberately NOT started (5c prefetch reads
+  gandalf atoms, so a gandalf distiller would feed the LIVE agent; decide separately).
+
+### 5c (HISTORY) — DESIGN DECISIONS from this session, each with WHY
+1. **`sync_turn` is a NO-OP.** The 5b host tap (`falda-tap-gandalf.service`) stays
+   the SOLE writer to tenant=gandalf. WHY: if the provider also wrote every turn,
+   each turn lands twice (tap + provider) — double-write, and it would blur the
+   tenant-privacy boundary. One writer = one ingestion path.
+2. **Provider exposes a DELIBERATE `falda_share` tool → shared-corpus pool.** WHY
+   (Charlie): sharing across agents must be a curated act, not a firehose. An
+   automatic per-turn write into the shared pool would dump everything into it and
+   destroy the privacy boundary between tenants. A tool call is the right granularity.
+3. **Two tools (`falda_share` write, `falda_search` read), EACH independently
+   config-gated** in `condition.yaml`; `get_tool_schemas()` consults config and
+   returns `[]`/`[share]`/`[search]`/`[both]`. WHY (Charlie): the research needs a
+   2×2 — prefetch {on,off} × search {on,off}. If the search tool were hardcoded
+   present whenever the provider loads, half the grid is unreachable. Tool
+   registration must consult config, not be unconditional.
+4. **Prefetch ships OFF first, flipped ON as a SEPARATE step.** WHY: one change at
+   a time — isolates "provider present" from "recall active", so a behavior change
+   is attributable. Matches the plan's shadow-first rule. (VERIFY A = provider on /
+   prefetch off / normal behavior; then flip prefetch on for VERIFY 5c.)
+5. **Telemetry semantics — the KEY instrument mapping:**
+   - `get_tool_schemas()` return = **the CONDITION** (what tools were exposed to
+     the model this session — authoritative, logged at session_open).
+   - `handle_tool_call` firing = **the OUTCOME** (proof a tool was not just
+     registered but actually reachable + used). Log every firing.
+   - Also log: `prefetch()` return (query hash, tiers, per-source counts, injected
+     chars, returned hash) + on/off; `system_prompt_block()` return + hash;
+     `on_pre_compress` (message count + approx chars); `on_session_switch`
+     (reason/reset/parent); `on_memory_write` (the COMPETING native MEMORY.md/
+     USER.md layer, observed not mirrored). All → ~/.falda/telemetry/ (0600,
+     gitignored-by-location), each line stamped with the condition_label.
+6. **v0.14.0 hook-surface findings (verified against deployed source):**
+   - `on_turn_start(turn, msg)` gets **NO kwargs** at the run_agent call site
+     (run_agent.py:12510 passes only 2 positional args). So **neither `tool_count`
+     NOR `remaining_tokens` NOR model/platform arrive there** — logged defensively
+     via `kwargs.get()` but they are absent in this version. Do not build analysis
+     on them.
+   - CONSEQUENCE: **compression events are the context-pressure instrument** instead
+     — `on_pre_compress` (what's about to be discarded) + `on_session_switch`
+     (reason="compression", chains old→new sid) together are the only reliable
+     signal of context pressure available from the ABC in v0.14.0.
+   - Full assembled system prompt reaches NO hook; read it from state.db
+     `sessions.system_prompt` per session_id if needed (not patching /opt/hermes).
+7. **FALDA RRF weights are HARDCODED `1/(RRF_K+i)`** (equal dense/lexical) in
+   `src/falda.ts` `hybrid()`. The `rrf_dense_weight`/`rrf_lexical_weight` knobs in
+   `condition.yaml` are therefore **INERT** — they're logged (intended-vs-actual)
+   but have no effect without a FALDA patch. **Upstream request to Rick:** accept
+   optional per-request `dense_weight`/`lexical_weight` (and maybe `rrf_k`) in the
+   search body, defaulting to current behavior. Recorded in docs/FALDA-FINDINGS.md (RE-5).
+
+### Other session findings already in docs/FALDA-FINDINGS.md
+RE-6 (distiller defaults FALDA_URL=:8078 / model gpt-4o-mini — wrong for this box);
+RE-7 (distiller T3 core wrapped in a stray ```markdown fence); BUG-2 addendum
+(patch 0002 forward-only; pre-existing orphan surfaced in the shared-corpus POOL,
+/atoms/search=2 vs /atoms/query=1). UMP finding (0.0.0.0 bind, same class as
+FALDA BUG-1) is in services/ump/README.md.
+
+### Phase 11 — UMP mirror (FALDA → UMP) — DONE, VERIFY 11 GREEN (2026-07-30)
+Charlie observed UMP was empty because ALL content flowed to FALDA; the plan only
+populated FALDA. UMP and FALDA were SEPARATE stores with no bridge (was: 0 FALDA
+facts in ~/.ump/memory.ump.json). Phase 11 closes that gap.
+
+**Built (all in services/ump/):**
+- `falda_ump_mirror.py` — stdlib-only sidecar. Reads FALDA `shared-corpus` atoms
+  via `/atoms/query` (incremental: watermark on `updated_at` + a seen-id set,
+  LOOKBACK_S overlap guard), writes UMP records via `POST /ump/remember`.
+  One-directional (no reverse path exists in the file, by design); `shared-corpus`
+  pool ONLY (private tenant memory never read); atoms not raw turns; enriched with
+  provenance (actor=owner, actor_kind=import, method=falda-shared-corpus-mirror,
+  source.ref=FALDA atom id) + scope.visibility=shared. Fail-soft: watermark/seen
+  only advance on a successful write.
+- `mirror.env.template` → ~/.config/ump/mirror.env (0600). UMP_OWNER has NO
+  default — refuses to run unset (scope.owner mandatory in UMP).
+- `falda-ump-mirror.service` — --user, Requires= falda-gateway + ump-memory.
+  Installed, enabled, active. status.sh + README updated (mirror unit + a
+  record-count line; VERIFY 11 block).
+
+**Idempotency — two layers, both proven:** (1) state file skips already-mirrored
+ids; (2) even with state wiped, UMP `findDuplicate` (body+scope) returns "merged"
+so no dupes. State-wipe re-run held the count at 6.
+
+**VERIFY 11 GREEN:** 2 shared-corpus atoms (VELVET-MERIDIAN, Thu-1400-UTC deploy)
+→ UMP records, kind=semantic, visibility=shared, provenance populated, source.ref
+= FALDA atom id. Recall via scope.owner returns both; omitting owner returns []
+(silent-empty). Private-tenant canary (tenant=gandalf, no pool) did NOT appear in
+UMP (canary then deleted). `ops/status.sh` = ALL GREEN incl. falda-ump-mirror.
+
+**Finding for Rick (in README):** FALDA atoms carry no authorship (6 fields only),
+so provenance.actor_kind is honestly "import" — the mirror does NOT fabricate a
+per-atom author. Companion to the RRF-weights finding.
+
+**Not committed yet** — awaiting Charlie's push signal (repo convention: commit at
+boundary, push on his word). All plan phases 0–11 now complete.

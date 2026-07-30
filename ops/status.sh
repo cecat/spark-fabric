@@ -23,7 +23,7 @@ note "spark-fabric substrate health ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
 echo "--- services ---"
 UNITS="ollama falda-gateway falda-tap-luoji falda-tap-gandalf falda-distiller-luoji \
 sibline-broker sibline-bridge-luoji sibline-bridge-gandalf gandalf-sibline-shuttle \
-ump-memory"
+ump-memory falda-ump-mirror"
 for u in $UNITS; do
   a=$(systemctl --user is-active "$u.service" 2>/dev/null)
   e=$(systemctl --user is-enabled "$u.service" 2>/dev/null)
@@ -90,6 +90,19 @@ if echo "$WK" | grep -q '"conformance"'; then
   ok "UMP well-known ok (conformance L2, owner ${OWNER:0:24}…)"
 else
   bad "UMP well-known FAILED"
+fi
+
+# FALDA -> UMP mirror (Phase 11): how many shared-corpus atoms have been made
+# portable in UMP. Non-fatal (0 is valid before anything is shared) — reports the
+# count and flags a store that can't be read.
+MSTORE="$HOME/.ump/memory.ump.json"
+if [ -f "$MSTORE" ]; then
+  MCOUNT=$(python3 -c 'import sys,json;recs=json.load(open(sys.argv[1]));print(sum(1 for r in recs if (r.get("provenance") or {}).get("method")=="falda-shared-corpus-mirror"))' "$MSTORE" 2>/dev/null)
+  if [ -n "$MCOUNT" ]; then
+    note "UMP mirror: $MCOUNT record(s) mirrored from FALDA shared-corpus"
+  else
+    warn "UMP mirror: could not parse $MSTORE"
+  fi
 fi
 
 echo ""

@@ -76,10 +76,68 @@ substrate (server + shared owner + portable store) is what Phase 10 delivers.
 Seeding tip: `ump import --owner <did> gandalf/soul/*.md` bootstraps records from
 existing Markdown.
 
+## Phase 11 — FALDA → UMP mirror (what puts content INTO UMP)
+
+Phase 10 stands UMP up but leaves it **empty**: every content path (taps,
+provider, distiller) flows into FALDA, and nothing bridged FALDA → UMP. Phase 11
+gives UMP a function without creating a second source of truth.
+
+- **`falda_ump_mirror.py`** — a stdlib-only sidecar (tap/distiller-shaped). Reads
+  distilled **atoms** from FALDA's **`shared-corpus` pool** and writes them as UMP
+  records under the one shared owner. **One-directional** (FALDA is the single
+  source of truth; nothing flows back), **`shared-corpus` only** (private tenant
+  memory is never read, so it can't leak), **atoms not raw turns** (an atom is
+  already record-shaped).
+- **Enrichment:** each record gets what a FALDA atom lacks so a shared fact is
+  auditable — `provenance` (`actor` = the shared owner, `actor_kind = import`,
+  `method = falda-shared-corpus-mirror`, `source.ref` = the FALDA atom id) and
+  `scope.visibility = shared`.
+- **Single writer:** the mirror is the ONLY writer into UMP. Agents must **not**
+  write UMP directly via MCP — two live stores with independent writers and no
+  source of truth diverge un-reconcilably.
+- **Idempotent, two layers:** (1) `~/.ump/mirror_state.json` tracks a watermark
+  (`updated_at`) + the set of already-mirrored atom ids; (2) even with that state
+  wiped, UMP's own `findDuplicate` (body+scope) returns `merged`, so re-runs never
+  duplicate. Layer 1 is the optimization; layer 2 is the correctness guard.
+- **Fail-soft:** FALDA or UMP down → log + skip the pass, retry next loop; the
+  watermark/seen-set only advance for atoms whose write succeeded.
+
+Config: `mirror.env.template` → `~/.config/ump/mirror.env` (0600). `UMP_OWNER` has
+no default — the mirror refuses to run unset (scope.owner is mandatory everywhere
+in UMP). Unit: `falda-ump-mirror.service` (`--user`, `Requires=` both
+falda-gateway + ump-memory). State + log live in `~/.ump/`.
+
+### ⚠️ Finding for Rick — FALDA atoms carry no authorship
+
+A FALDA atom has exactly six fields (`id, type, content, background, created_at,
+updated_at`) — it does **not** record which agent authored it. So the mirror
+cannot set a truthful per-atom `provenance.actor`/`actor_kind`; it honestly uses
+`actor_kind = import` and `actor` = the shared owner (the principal the mirror
+runs as) rather than fabricating an author. If FALDA later stamps atom
+authorship, the mirror can pass it through faithfully. (Companion to the earlier
+RRF-weights finding.)
+
+### VERIFY 11 (green 2026-07-30)
+
+- Ran the mirror `--once`: 2 `shared-corpus` atoms (VELVET-MERIDIAN codeword,
+  Thursday 1400 UTC deploy window) became UMP records — `kind=semantic`,
+  `visibility=shared`, provenance populated, `source.ref` = the FALDA atom id.
+- **Idempotent:** immediate re-run added 0. **State-wipe re-run** also added 0
+  (UMP `findDuplicate` merged) — count held at 6.
+- **Private isolation:** seeded a private `tenant=gandalf` (no pool) canary atom;
+  after a mirror pass it did **NOT** appear in UMP. (Canary then deleted.)
+- **Recall:** `POST /ump/recall {query, scope.owner}` returns both mirrored facts;
+  omitting `scope.owner` returns `[]` (the documented silent-empty shape).
+- **One-directional:** there is no reverse path in `falda_ump_mirror.py` — it only
+  READs FALDA and only WRITEs UMP.
+
 ## Operate
 
 ```bash
-systemctl --user status ump-memory
-bash ~/code/spark-fabric/ops/status.sh          # includes UMP checks
+systemctl --user status ump-memory falda-ump-mirror
+bash ~/code/spark-fabric/ops/status.sh          # includes UMP + mirror checks
 ~/.nvm/versions/node/v22.22.3/bin/ump-conformance http://127.0.0.1:4100
+# one-shot mirror pass (loads env, exits after one sweep):
+set -a; . ~/.config/ump/mirror.env; set +a
+python3 ~/code/spark-fabric/services/ump/falda_ump_mirror.py --once
 ```

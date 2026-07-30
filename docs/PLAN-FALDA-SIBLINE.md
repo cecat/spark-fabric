@@ -737,6 +737,53 @@ Notes:
 
 ---
 
+## Phase 11 — UMP mirror (FALDA → UMP)  *(DONE — VERIFY 11 green 2026-07-30)*
+
+**Status: complete.** Phases 0–11 are all done. Built as
+`services/ump/falda_ump_mirror.py` + `mirror.env.template` +
+`falda-ump-mirror.service`; see `services/ump/README.md` "Phase 11" for the
+VERIFY 11 results and the atom-authorship finding for Rick.
+
+**The gap this closes.** Phases 0–10 populate only FALDA; UMP (phase 10) is stood
+up and L2-conformant but **empty** — every content path (taps, provider, distiller)
+flows into FALDA, and nothing bridges FALDA → UMP. So UMP currently has no
+function. This phase gives it one without creating a second source of truth.
+
+**Design — one-directional FALDA → UMP, deliberately scoped:**
+
+- **Direction: FALDA → UMP only.** FALDA remains the single source of truth. A
+  small sidecar (distiller-shaped) reads from FALDA and writes UMP records.
+- **Scope: the `shared-corpus` pool ONLY.** Never mirror private tenant memory —
+  private stays private. UMP is the *portable, shareable* view, so only what was
+  deliberately shared belongs in it.
+- **Granularity: atoms, not raw stream turns.** A FALDA atom is a distilled fact,
+  which is exactly the shape of a UMP record. Raw turns are conversation, not
+  portable memory.
+- **Enrich on the way out:** populate the UMP fields a FALDA atom lacks —
+  `provenance` (`actor`, `actor_kind`, `method`) and `scope.visibility` — so a
+  shared fact is **auditable**: who asserted it, how it was produced, how widely
+  it may travel. These are what make a shared fact trustworthy to an external
+  reader, and FALDA atoms don't carry them.
+- **Do NOT let agents write UMP directly via MCP.** Two live stores with
+  independent writers and no source of truth is a consistency problem (divergent,
+  un-reconcilable memory). The mirror is the only writer into UMP.
+
+**How it composes:** agent calls `falda_share` (a deliberate act) → the fact lands
+in `shared-corpus` → the mirror makes it portable in UMP → another operator, or a
+different memory engine entirely, can read it. UMP thus becomes the **swap-proof
+layer**: because the shared memory also exists in a vendor-neutral portable format,
+you can later point a *different* engine at the same records — which is precisely
+what makes a cross-engine comparison (e.g. FALDA vs. an alternative) possible.
+
+> **VERIFY 11:** call `falda_share` as Gandalf → confirm the fact
+> appears in `shared-corpus` (FALDA) AND, after the mirror runs, as a UMP record
+> under the shared owner with populated `provenance` + `scope.visibility=shared`.
+> Confirm a private-tenant atom does NOT appear in UMP. Confirm the mirror is
+> idempotent (re-running doesn't duplicate) and one-directional (a UMP-side change
+> never flows back into FALDA).
+
+---
+
 ## Deliverables, by repo
 
 ### `spark-fabric` — the shared substrate

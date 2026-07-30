@@ -1,0 +1,21 @@
+[Unit]
+Description=FALDA -> UMP mirror (Phase 11 — shared-corpus atoms made portable in UMP)
+After=network-online.target falda-gateway.service ump-memory.service
+Wants=network-online.target
+# Needs BOTH stores: FALDA to read shared-corpus atoms, UMP to write records.
+# If either is down the mirror logs + skips the pass and retries (fail-soft).
+Requires=falda-gateway.service ump-memory.service
+
+[Service]
+Type=simple
+# stdlib-only python3 (same as the taps/distiller; NOT a venv).
+# Env carries FALDA_URL, the shared UMP_OWNER did:key, pool + runtime knobs.
+EnvironmentFile=%h/.config/ump/mirror.env
+ExecStart=/usr/bin/python3 %h/code/spark-fabric/services/ump/falda_ump_mirror.py
+Restart=always
+RestartSec=30
+StandardOutput=append:%h/.ump/mirror.log
+StandardError=append:%h/.ump/mirror.log
+
+[Install]
+WantedBy=default.target
