@@ -22,7 +22,8 @@ note "spark-fabric substrate health ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
 # ── 1. systemd --user units (active + enabled = running now AND survives reboot)
 echo "--- services ---"
 UNITS="ollama falda-gateway falda-tap-luoji falda-tap-gandalf falda-distiller-luoji \
-sibline-broker sibline-bridge-luoji sibline-bridge-gandalf gandalf-sibline-shuttle"
+sibline-broker sibline-bridge-luoji sibline-bridge-gandalf gandalf-sibline-shuttle \
+ump-memory"
 for u in $UNITS; do
   a=$(systemctl --user is-active "$u.service" 2>/dev/null)
   e=$(systemctl --user is-enabled "$u.service" 2>/dev/null)
@@ -70,6 +71,25 @@ if [ -f "$CRED" ] && [ -x "$NATS_BIN" ]; then
   done
 else
   warn "nats CLI or cred file missing — skipping stream checks"
+fi
+
+# ── 4. UMP memory server (interchange format)
+echo "--- UMP ---"
+UMP_PORT=$(grep -s '^UMP_HTTP=' "$HOME/.config/ump/ump.env" | cut -d= -f2 || echo 4100)
+UMP_PORT=${UMP_PORT:-4100}
+if ss -ltn 2>/dev/null | grep -q "127.0.0.1:${UMP_PORT}"; then
+  ok "UMP listening (127.0.0.1:${UMP_PORT} loopback)"
+elif ss -ltn 2>/dev/null | grep -qE "(0\.0\.0\.0|\*):${UMP_PORT}"; then
+  bad "UMP bound to ALL interfaces on :${UMP_PORT} — should be loopback (check the wrapper)"
+else
+  bad "UMP NOT listening on :${UMP_PORT}"
+fi
+WK=$(curl -s -m5 "http://127.0.0.1:${UMP_PORT}/.well-known/ump.json" 2>/dev/null)
+if echo "$WK" | grep -q '"conformance"'; then
+  OWNER=$(echo "$WK" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("owner",""))' 2>/dev/null)
+  ok "UMP well-known ok (conformance L2, owner ${OWNER:0:24}…)"
+else
+  bad "UMP well-known FAILED"
 fi
 
 echo ""

@@ -1,0 +1,19 @@
+[Unit]
+Description=UMP memory server (loopback :4100, shared did:key owner) — spark-fabric Phase 10
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Env carries UMP_DIR, UMP_HTTP, UMP_HOST, UMP_STORE, UMP_CORE_INDEX.
+EnvironmentFile=%h/.config/ump/ump.env
+# Pin the same nvm node v22 the package was installed under (engines: node>=20;
+# system /usr/bin/node is v18 — would fail). Same pin rationale as FALDA.
+ExecStart=%h/.nvm/versions/node/v22.22.3/bin/node %h/code/spark-fabric/services/ump/ump-memory-loopback.mjs
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/.ump/ump-memory.log
+StandardError=append:%h/.ump/ump-memory.log
+
+[Install]
+WantedBy=default.target

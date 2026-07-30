@@ -1266,3 +1266,73 @@ all self-hosted and loopback-only. The core deliverable of the plan is met.
 
 ### Next: Phase 10 — UMP (OPTIONAL, memory interchange format / MCP server).
 Note the known port collision: plan's example wants :4000 but LiteLLM owns it.
+
+---
+
+## Phase 10 — UMP (memory interchange format) — ✅ VERIFY 10 GREEN (2026-07-30)
+
+Charlie: "replicating Rick's environment, shouldn't stop short at FS — do UMP."
+Agreed. UMP is the memory INTERCHANGE FORMAT (MCP server) complementary to
+FALDA's engine; makes a fact portable/cross-tool. Deliverables in
+`spark-fabric/services/ump/`.
+
+### Install + pins
+`@universalmemoryprotocol/core` v0.2.0 (npm, MIT) global under nvm node v22.22.3
+(engines node>=20; system v18 would fail — same pin as FALDA). Bins ump/
+ump-memory/ump-serve/ump-import/ump-conformance. Server conformance UMP 0.1 / L2.
+
+### 🐞 Finding (checked the artifact) — UMP binds 0.0.0.0
+`ump memory --http <port>` calls `.listen(port)` with NO host → binds all
+interfaces. UMP has no transport auth (owner scope only), so on this box
+(Tailscale + LAN) the store would be off-box reachable. Same class as FALDA
+BUG-1. UMP is a GLOBAL npm package, so patching dist/ is not rebuild-safe —
+instead wrote `services/ump/ump-memory-loopback.mjs`, a faithful reimpl of the
+`memory` bin that imports the package's public API (UmpServer, createHttpServer,
+JsonFileStore, JsonlAuditLog, generateKeyPair) and calls `.listen(port,
+"127.0.0.1")`. Verified: binds 127.0.0.1 only; LAN IP refuses. Suggested upstream
+fix: `--host`/`UMP_HOST`, default loopback. (Candidate report for UMP maintainers,
+in services/ump/README.md.)
+
+### Wrapper resolution gotcha
+ESM `import "@universalmemoryprotocol/core"` can't resolve a GLOBAL package from
+an out-of-tree script (NODE_PATH doesn't help ESM). Fixed by importing the
+absolute `dist/index.js` via `UMP_CORE_INDEX` (derived from `npm root -g`).
+
+### Port + owner
+- Port **:4100** (plan's :4000 is taken by LiteLLM — confirmed PID 2507).
+- ONE shared `did:key` owner for BOTH agents (per plan):
+  `did:key:z6Mksh6F8K7vFaPpzmstzqR2Fj9zaWwJpHC5q1QCVAYFDqbw`. Seed in
+  `~/.ump/key.json` (0600). Both agents will use this same owner so memory is
+  interchangeable. Store `~/.ump/memory.ump.json` (portable JSON), audit
+  `audit.log.jsonl`.
+
+### VERIFY 10 — PASS (all three)
+- Conformance `ump-conformance http://127.0.0.1:4100` → **UMP 0.1 / L2, 12/13**
+  (the one miss is L3 capability_tokens, above the L2 target — fine).
+- Wrote a `semantic` record under the shared owner (routes are `/ump/*`, e.g.
+  `/ump/remember`; schema needs `body.text`, kind∈semantic|episodic|procedural|
+  working|identity, scope.visibility∈private|shared|public), recalled it back via
+  `scope.owner`. **`scope.owner` mandatory confirmed:** omitting it → `{"results":
+  []}` (silent empty, no error — the plan's warning, verified).
+- `~/.ump/memory.ump.json` is self-describing plain JSON, copyable to another
+  machine; a recall by the shared owner resolves it → what one agent writes under
+  the owner, the other reads. Test record tombstoned after (UMP bitemporal
+  soft-delete — stays in file marked forgotten, correct).
+- Loopback bind verified via `ss` + LAN-IP refusal.
+
+### Unit + status
+`ump-memory.service` (--user, nvm-node-pinned) active+enabled. Added UMP to
+`spark-fabric/ops/status.sh` (loopback-bind assertion + well-known/conformance).
+Now **10 self-sustaining --user services**; fabric status = ALL GREEN.
+
+### Not done — agent MCP wiring (deliberate, more invasive)
+Making the agents USE UMP live = registering the server in each agent's MCP
+config (Hermes `mcp_servers`, OpenClaw MCP). Touches agent-repo config; a
+follow-up. Phase 10 delivers the substrate (server + shared owner + portable
+store + L2 conformance). `ump import --owner <did> gandalf/soul/*.md` can seed.
+
+## 🎉 FUS COMPLETE: F✅ U✅ S✅
+All three of Rick's components replicated, self-hosted, loopback-only:
+FALDA (memory engine + shared pool + distillation), UMP (interchange format),
+Sibline (message bus). 10 self-sustaining --user services. Both sandboxed agents
+share memory and coordinate. Phase 10 was the last plan phase.
